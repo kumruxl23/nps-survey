@@ -116,7 +116,13 @@
         </td>
         <td>${c.last_reminder_at || '—'}</td>
         <td>
-          ${isActive ? `<button class="btn btn-sm btn-outline-danger btn-close-cycle" data-cycleid="${c.cycle_id}">Close</button>` : ''}
+          ${isActive ? `
+            <button class="btn btn-sm btn-primary btn-distribute" data-cycleid="${c.cycle_id}" ${c.distributed_at ? 'disabled title="Already distributed"' : ''}>
+              ${c.distributed_at ? '✓ Distributed' : 'Distribute'}
+            </button>
+            <button class="btn btn-sm btn-warning btn-remind" data-cycleid="${c.cycle_id}">Remind</button>
+            <button class="btn btn-sm btn-outline-danger btn-close-cycle" data-cycleid="${c.cycle_id}">Close</button>
+          ` : ''}
         </td>`;
       cycleBody.appendChild(tr);
     }
@@ -133,6 +139,48 @@
         });
         if (res.ok) loadCycles();
         else alert('Error: ' + (res.data.error || 'Unknown'));
+      });
+    });
+
+    // Distribute survey buttons
+    document.querySelectorAll('.btn-distribute').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Distribute survey to all nominated stakeholders?')) return;
+        this.disabled = true;
+        this.textContent = 'Sending...';
+        const res = await postJson('/nps/distribute', {
+          org_id: selectedOrg(), cycle_id: this.dataset.cycleid
+        });
+        if (res.ok) {
+          const d = res.data;
+          alert(`Distribution complete!\nSent: ${d.sent_count}\nFailed: ${d.failed_count}${d.already_distributed ? '\n(Already distributed)' : ''}`);
+          loadCycles();
+        } else {
+          alert('Error: ' + (res.data.error || 'Unknown'));
+          this.disabled = false;
+          this.textContent = 'Distribute';
+        }
+      });
+    });
+
+    // Send reminder buttons
+    document.querySelectorAll('.btn-remind').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Send reminder to all non-respondents?')) return;
+        this.disabled = true;
+        this.textContent = 'Sending...';
+        const res = await postJson('/nps/remind', {
+          org_id: selectedOrg(), cycle_id: this.dataset.cycleid
+        });
+        if (res.ok) {
+          const d = res.data;
+          alert(`Reminder sent!\nEmail: ${d.email_sent_count}\nSlack: ${d.slack_sent_count}\nFailed: ${d.failed_count}`);
+          loadCycles();
+        } else {
+          alert('Error: ' + (res.data.error || 'Unknown'));
+          this.disabled = false;
+          this.textContent = 'Remind';
+        }
       });
     });
 
