@@ -66,7 +66,10 @@ def login_page():
 @auth_bp.route("/login", methods=["POST"])
 def login():
     """Authenticate user."""
-    data = request.json or request.form
+    if request.is_json:
+        data = request.json
+    else:
+        data = request.form
     username = data.get("username", "")
     password = data.get("password", "")
 
