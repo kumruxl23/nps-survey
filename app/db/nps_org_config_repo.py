@@ -109,12 +109,11 @@ def update_org(org_id: str, **fields) -> None:
 
 
 def list_active_orgs() -> list[OrgConfig]:
-    """Scan for all orgs where is_active is True."""
+    """Scan for all orgs where is_active is True (excludes system records)."""
     table = _get_table()
     response = table.scan(FilterExpression=Attr("is_active").eq(True))
     items = response.get("Items", [])
 
-    # Handle pagination
     while "LastEvaluatedKey" in response:
         response = table.scan(
             FilterExpression=Attr("is_active").eq(True),
@@ -122,20 +121,19 @@ def list_active_orgs() -> list[OrgConfig]:
         )
         items.extend(response.get("Items", []))
 
-    return [_item_to_org_config(item) for item in items]
+    return [_item_to_org_config(item) for item in items if not item["org_id"].startswith("__")]
 
 
 def list_all_orgs() -> list[OrgConfig]:
-    """Scan all org config items."""
+    """Scan all org config items (excludes system records)."""
     table = _get_table()
     response = table.scan()
     items = response.get("Items", [])
 
-    # Handle pagination
     while "LastEvaluatedKey" in response:
         response = table.scan(
             ExclusiveStartKey=response["LastEvaluatedKey"],
         )
         items.extend(response.get("Items", []))
 
-    return [_item_to_org_config(item) for item in items]
+    return [_item_to_org_config(item) for item in items if not item["org_id"].startswith("__")]
