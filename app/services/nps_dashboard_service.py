@@ -82,7 +82,7 @@ def compute_nps_all_cycles(org_id: str) -> list[NpsSummary]:
     for cycle in cycles:
         s = compute_nps(org_id, cycle.cycle_id)
         # Attach cycle_name for display
-        s.cycle_name = getattr(cycle, "cycle_name", "") or cycle.cycle_id
+        s.cycle_name = getattr(cycle, "cycle_name", "") or f"{cycle.start_date} to {cycle.end_date}"
         summaries.append(s)
     return summaries
 

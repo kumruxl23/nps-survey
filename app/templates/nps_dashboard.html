@@ -42,7 +42,10 @@
   }
 
   function cycleName(s) {
-    return s.cycle_name || s.cycle_id;
+    if (s.cycle_name) return s.cycle_name;
+    // Fallback: show date range if available, otherwise short UUID
+    if (s.start_date && s.end_date) return s.start_date + ' to ' + s.end_date;
+    return s.cycle_id.substring(0, 8) + '...';
   }
 
   function buildLeaderTable(leaders) {
