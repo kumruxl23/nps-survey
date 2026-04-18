@@ -1,17 +1,27 @@
 """Service for importing nominations from uploaded Excel/CSV files.
 
-Supports .xlsx, .xls, and .csv files. Extracts stakeholder name, email,
-and optionally leader columns. Skips duplicates within the same org/cycle.
+Supports .xlsx, .xls, and .csv files. Handles multiple CSV formats:
+- Standard format: Name, Email, Leader columns
+- Amazon NPS format: PoC, PoC Alias, Stakeholder, Stakeholder Alias,
+  "Should this stakeholder be included..." columns.
+  Aliases get @amazon.com appended automatically.
 """
 
 import csv
 import io
 import logging
+import re
 
 from app.db import nps_nomination_repo
 from app.db.models import ImportResult, Nomination
 
 logger = logging.getLogger(__name__)
+
+# Known column name patterns (case-insensitive)
+_EMAIL_PATTERNS = ["email", "email address", "e-mail", "stakeholder email", "stakeholder alias"]
+_NAME_PATTERNS = ["name", "full name", "stakeholder name", "stakeholder"]
+_LEADER_PATTERNS = ["leader", "poc", "manager"]
+_INCLUDE_PATTERNS = ["should this stakeholder be included", "include", "included"]
 
 
 def import_from_excel(
@@ -19,46 +29,38 @@ def import_from_excel(
     cycle_id: str,
     file_bytes: bytes,
     filename: str,
-    name_column: str = "Name",
-    email_column: str = "Email",
-    leader_column: str = "Leader",
 ) -> ImportResult:
-    """Import nominations from an uploaded Excel or CSV file.
-
-    Args:
-        org_id: Organization identifier.
-        cycle_id: Survey cycle identifier.
-        file_bytes: Raw file content bytes.
-        filename: Original filename (used to detect format).
-        name_column: Column header for stakeholder name.
-        email_column: Column header for stakeholder email.
-        leader_column: Column header for leader (optional).
-
-    Returns:
-        ImportResult with imported, skipped, and total counts.
-
-    Raises:
-        ValueError: If file format is unsupported or required columns missing.
-    """
+    """Import nominations from an uploaded Excel or CSV file."""
     lower = filename.lower()
     if lower.endswith(".csv"):
-        rows = _parse_csv(file_bytes, name_column, email_column, leader_column)
+        rows = _parse_csv(file_bytes)
     elif lower.endswith((".xlsx", ".xls")):
-        rows = _parse_excel(file_bytes, name_column, email_column, leader_column)
+        rows = _parse_excel(file_bytes)
     else:
         raise ValueError(f"Unsupported file format: {filename}. Use .xlsx, .xls, or .csv")
 
     total_in_source = len(rows)
     imported_count = 0
     skipped_duplicates = 0
+    skipped_excluded = 0
 
     for row in rows:
         name = row["name"].strip()
         email = row["email"].strip().lower()
         leader = row.get("leader", "").strip()
+        include = row.get("include", "yes").strip().lower()
 
         if not email:
             continue
+
+        # Skip stakeholders marked as "no" for inclusion
+        if include in ("no", "n", "false", "0"):
+            skipped_excluded += 1
+            continue
+
+        # Append @amazon.com if email is just an alias (no @ sign)
+        if "@" not in email:
+            email = email + "@amazon.com"
 
         existing = nps_nomination_repo.get_nomination(org_id, cycle_id, email)
         if existing is not None:
@@ -82,93 +84,114 @@ def import_from_excel(
     )
 
 
-def _parse_csv(
-    file_bytes: bytes, name_col: str, email_col: str, leader_col: str
-) -> list[dict]:
-    """Parse a CSV file into name/email/leader dicts."""
-    text = file_bytes.decode("utf-8-sig")  # handle BOM
+def _parse_csv(file_bytes: bytes) -> list[dict]:
+    """Parse a CSV file into standardized name/email/leader/include dicts."""
+    text = file_bytes.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
-
-    # Find matching columns (case-insensitive)
     fieldnames = reader.fieldnames or []
-    col_map = _find_columns(fieldnames, name_col, email_col, leader_col)
+    col_map = _detect_columns(fieldnames)
 
     rows = []
     for row in reader:
         name = row.get(col_map["name"], "").strip()
         email = row.get(col_map["email"], "").strip()
         leader = row.get(col_map.get("leader", ""), "").strip() if col_map.get("leader") else ""
+        include = row.get(col_map.get("include", ""), "yes").strip() if col_map.get("include") else "yes"
         if email:
-            rows.append({"name": name, "email": email, "leader": leader})
+            rows.append({"name": name, "email": email, "leader": leader, "include": include})
     return rows
 
 
-def _parse_excel(
-    file_bytes: bytes, name_col: str, email_col: str, leader_col: str
-) -> list[dict]:
-    """Parse an Excel file into name/email/leader dicts."""
+def _parse_excel(file_bytes: bytes) -> list[dict]:
+    """Parse an Excel file into standardized name/email/leader/include dicts."""
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     ws = wb.active
 
-    # Read header row
     header_row = []
     for cell in next(ws.iter_rows(min_row=1, max_row=1)):
         header_row.append(str(cell.value or "").strip())
 
-    col_map = _find_columns(header_row, name_col, email_col, leader_col)
+    col_map = _detect_columns(header_row)
     name_idx = header_row.index(col_map["name"])
     email_idx = header_row.index(col_map["email"])
     leader_idx = header_row.index(col_map["leader"]) if col_map.get("leader") and col_map["leader"] in header_row else None
+    include_idx = header_row.index(col_map["include"]) if col_map.get("include") and col_map["include"] in header_row else None
 
     rows = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         name = str(row[name_idx] or "").strip() if name_idx < len(row) else ""
         email = str(row[email_idx] or "").strip() if email_idx < len(row) else ""
         leader = str(row[leader_idx] or "").strip() if leader_idx is not None and leader_idx < len(row) else ""
+        include = str(row[include_idx] or "yes").strip() if include_idx is not None and include_idx < len(row) else "yes"
         if email:
-            rows.append({"name": name, "email": email, "leader": leader})
+            rows.append({"name": name, "email": email, "leader": leader, "include": include})
 
     wb.close()
     return rows
 
 
-def _find_columns(
-    headers: list[str], name_col: str, email_col: str, leader_col: str
-) -> dict:
-    """Find column names case-insensitively. Raises ValueError if required columns missing."""
-    lower_headers = {h.lower().strip(): h for h in headers}
+def _detect_columns(headers: list[str]) -> dict:
+    """Auto-detect column mapping from headers.
 
-    name_key = lower_headers.get(name_col.lower())
-    email_key = lower_headers.get(email_col.lower())
-    leader_key = lower_headers.get(leader_col.lower())
+    Handles both standard format (Name, Email, Leader) and
+    Amazon NPS format (PoC, Stakeholder, Stakeholder Alias, etc.)
+    """
+    lower_map = {}
+    for h in headers:
+        key = h.lower().strip()
+        if key not in lower_map:  # first occurrence wins (handles duplicate "Stakeholder" columns)
+            lower_map[key] = h
 
-    if not email_key:
-        # Try common alternatives
-        for alt in ["email", "email address", "e-mail", "stakeholder email"]:
-            if alt in lower_headers:
-                email_key = lower_headers[alt]
+    result = {}
+
+    # Detect email column: "Stakeholder Alias" or "Email" variants
+    for pattern in _EMAIL_PATTERNS:
+        for key, original in lower_map.items():
+            if pattern in key:
+                result["email"] = original
                 break
+        if "email" in result:
+            break
 
-    if not name_key:
-        for alt in ["name", "full name", "stakeholder name", "stakeholder"]:
-            if alt in lower_headers:
-                name_key = lower_headers[alt]
+    # Detect name column: "Stakeholder" (but not "Stakeholder Alias")
+    for pattern in _NAME_PATTERNS:
+        for key, original in lower_map.items():
+            if key == pattern or (pattern in key and "alias" not in key and "included" not in key and "respond" not in key and "interact" not in key):
+                result["name"] = original
                 break
+        if "name" in result:
+            break
 
-    if not email_key:
+    # Detect leader column: "PoC" or "Leader"
+    for pattern in _LEADER_PATTERNS:
+        for key, original in lower_map.items():
+            if key == pattern or (pattern in key and "alias" not in key):
+                result["leader"] = original
+                break
+        if "leader" in result:
+            break
+
+    # Detect include/exclude column
+    for pattern in _INCLUDE_PATTERNS:
+        for key, original in lower_map.items():
+            if pattern in key:
+                result["include"] = original
+                break
+        if "include" in result:
+            break
+
+    if "email" not in result:
         raise ValueError(
-            f"Could not find email column. Headers found: {headers}. "
-            f"Expected a column named '{email_col}' (case-insensitive)."
+            f"Could not find email/alias column. Headers found: {headers}. "
+            f"Expected one of: {_EMAIL_PATTERNS}"
         )
-    if not name_key:
+    if "name" not in result:
         raise ValueError(
             f"Could not find name column. Headers found: {headers}. "
-            f"Expected a column named '{name_col}' (case-insensitive)."
+            f"Expected one of: {_NAME_PATTERNS}"
         )
 
-    result = {"name": name_key, "email": email_key}
-    if leader_key:
-        result["leader"] = leader_key
+    logger.info("Detected columns: %s", result)
     return result
