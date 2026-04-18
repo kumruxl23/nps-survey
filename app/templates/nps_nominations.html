@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Nominations{% endblock %}
+
+{% block content %}
+<h2>Stakeholder Nominations</h2>
+
+<!-- Org/Cycle selector -->
+<div class="card mb-4">
+  <div class="card-body">
+    <form id="selectorForm" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Organization</label>
+        <select class="form-select" id="orgSelect" required>
+          <option value="">Select org...</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Survey Cycle</label>
+        <select class="form-select" id="cycleSelect" required>
+          <option value="">Select cycle...</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <button type="submit" class="btn btn-primary">Load Nominations</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Import from file (Excel/CSV) -->
+<div class="card mb-4 d-none" id="importCard">
+  <div class="card-header">Import Nominations from File</div>
+  <div class="card-body">
+    <p class="text-muted small mb-2">Upload an Excel (.xlsx) or CSV file with columns: Name, Email, Leader (optional). Download from SharePoint first.</p>
+    <form id="importForm" class="row g-2 align-items-end" enctype="multipart/form-data">
+      <div class="col-md-6">
+        <input type="file" class="form-control" name="file" accept=".xlsx,.xls,.csv" required>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-success">Upload &amp; Import</button>
+      </div>
+    </form>
+    <div id="importResult" class="mt-2"></div>
+  </div>
+</div>
+
+<!-- Manual add -->
+<div class="card mb-4 d-none" id="addCard">
+  <div class="card-header">Add Stakeholder</div>
+  <div class="card-body">
+    <form id="addNomForm" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <input type="text" class="form-control" name="name" placeholder="Name" required>
+      </div>
+      <div class="col-md-4">
+        <input type="email" class="form-control" name="email" placeholder="Email" required>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-primary">Add</button>
+      </div>
+    </form>
+    <div id="addNomResult" class="mt-2"></div>
+  </div>
+</div>
+
+<!-- Nomination list -->
+<div class="card d-none" id="listCard">
+  <div class="card-header">Nomination List <span id="nomCount" class="badge bg-secondary ms-2"></span></div>
+  <div class="card-body">
+    <table class="table table-sm">
+      <thead><tr><th>Name</th><th>Email</th><th>Responded</th><th>Actions</th></tr></thead>
+      <tbody id="nomTableBody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const orgSelect = document.getElementById('orgSelect');
+  const cycleSelect = document.getElementById('cycleSelect');
+  const nomBody = document.getElementById('nomTableBody');
+
+  function selectedOrg() { return orgSelect.value; }
+  function selectedCycle() { return cycleSelect.value; }
+
+  async function postJson(url, data) {
+    const resp = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    return { ok: resp.ok, status: resp.status, data: await resp.json() };
+  }
+
+  // Load orgs into dropdown
+  async function loadOrgs() {
+    const resp = await fetch('/nps/orgs');
+    const orgs = await resp.json();
+    for (const o of orgs.filter(x => x.is_active)) {
+      const opt = document.createElement('option');
+      opt.value = o.org_id;
+      opt.textContent = o.org_name || o.org_id;
+      orgSelect.appendChild(opt);
+    }
+  }
+
+  // Load cycles when org changes
+  orgSelect.addEventListener('change', async function () {
+    cycleSelect.innerHTML = '<option value="">Select cycle...</option>';
+    if (!this.value) return;
+    const resp = await fetch('/nps/cycles?org_id=' + encodeURIComponent(this.value));
+    const cycles = await resp.json();
+    for (const c of cycles) {
+      const opt = document.createElement('option');
+      opt.value = c.cycle_id;
+      opt.textContent = `${c.start_date} to ${c.end_date} (${c.status})`;
+      cycleSelect.appendChild(opt);
+    }
+  });
+
+  // Load nominations
+  async function loadNominations() {
+    const org = selectedOrg();
+    const cycle = selectedCycle();
+    if (!org || !cycle) return;
+
+    const resp = await fetch(`/nps/nominations?org_id=${encodeURIComponent(org)}&cycle_id=${encodeURIComponent(cycle)}`);
+    const noms = await resp.json();
+
+    document.getElementById('importCard').classList.remove('d-none');
+    document.getElementById('addCard').classList.remove('d-none');
+    document.getElementById('listCard').classList.remove('d-none');
+    document.getElementById('nomCount').textContent = noms.length;
+
+    nomBody.innerHTML = '';
+    for (const n of noms) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${n.name}</td>
+        <td>${n.email}</td>
+        <td>${n.responded ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-warning text-dark">No</span>'}</td>
+        <td><button class="btn btn-sm btn-outline-danger btn-remove" data-email="${n.email}">Remove</button></td>`;
+      nomBody.appendChild(tr);
+    }
+    attachRemoveHandlers();
+  }
+
+  function attachRemoveHandlers() {
+    document.querySelectorAll('.btn-remove').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Remove this stakeholder?')) return;
+        const res = await postJson('/nps/nominations/remove', {
+          org_id: selectedOrg(), cycle_id: selectedCycle(), email: this.dataset.email
+        });
+        if (res.ok) loadNominations();
+        else alert('Error: ' + (res.data.error || 'Unknown'));
+      });
+    });
+  }
+
+  // Selector form
+  document.getElementById('selectorForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    loadNominations();
+  });
+
+  // Import from file (Excel/CSV)
+  document.getElementById('importForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const formData = new FormData();
+    formData.append('org_id', selectedOrg());
+    formData.append('cycle_id', selectedCycle());
+    formData.append('file', this.querySelector('input[name="file"]').files[0]);
+
+    const resp = await fetch('/nps/nominations/upload', {
+      method: 'POST',
+      body: formData,
+    });
+    const res = { ok: resp.ok, data: await resp.json() };
+    const el = document.getElementById('importResult');
+    if (res.ok) {
+      const d = res.data;
+      el.innerHTML = `<div class="alert alert-success py-1">Imported ${d.imported_count}, skipped ${d.skipped_duplicates} duplicates (${d.total_in_source} in source).</div>`;
+      loadNominations();
+    } else {
+      el.innerHTML = `<div class="alert alert-danger py-1">${res.data.error || 'Error'}</div>`;
+    }
+  });
+
+  // Manual add
+  document.getElementById('addNomForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const fd = new FormData(this);
+    const res = await postJson('/nps/nominations/add', {
+      org_id: selectedOrg(), cycle_id: selectedCycle(),
+      name: fd.get('name'), email: fd.get('email')
+    });
+    const el = document.getElementById('addNomResult');
+    if (res.ok) {
+      el.innerHTML = '<div class="alert alert-success py-1">Stakeholder added.</div>';
+      this.reset();
+      loadNominations();
+    } else {
+      el.innerHTML = `<div class="alert alert-danger py-1">${res.data.error || 'Error'}</div>`;
+    }
+  });
+
+  loadOrgs();
+})();
+</script>
+{% endblock %}

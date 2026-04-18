@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Survey Cycles{% endblock %}
+
+{% block content %}
+<h2>Survey Cycles</h2>
+
+<!-- Org selector -->
+<div class="card mb-4">
+  <div class="card-body">
+    <form id="orgForm" class="row g-2 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">Organization</label>
+        <select class="form-select" id="orgSelect" required>
+          <option value="">Select org...</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-primary">Load Cycles</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Create cycle -->
+<div class="card mb-4 d-none" id="createCard">
+  <div class="card-header">Create New Cycle</div>
+  <div class="card-body">
+    <form id="createForm" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Start Date</label>
+        <input type="date" class="form-control" name="start_date" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">End Date</label>
+        <input type="date" class="form-control" name="end_date" required>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-success">Create Cycle</button>
+      </div>
+    </form>
+    <div id="createResult" class="mt-2"></div>
+  </div>
+</div>
+
+<!-- Cycle list -->
+<div class="card d-none" id="listCard">
+  <div class="card-header">Cycles</div>
+  <div class="card-body">
+    <table class="table table-sm">
+      <thead>
+        <tr>
+          <th>Cycle ID</th><th>Start</th><th>End</th><th>Status</th>
+          <th>Reminder Mode</th><th>Last Reminder</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="cycleTableBody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const orgSelect = document.getElementById('orgSelect');
+  const cycleBody = document.getElementById('cycleTableBody');
+
+  function selectedOrg() { return orgSelect.value; }
+
+  async function postJson(url, data) {
+    const resp = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    return { ok: resp.ok, status: resp.status, data: await resp.json() };
+  }
+
+  async function loadOrgs() {
+    const resp = await fetch('/nps/orgs');
+    const orgs = await resp.json();
+    for (const o of orgs.filter(x => x.is_active)) {
+      const opt = document.createElement('option');
+      opt.value = o.org_id;
+      opt.textContent = o.org_name || o.org_id;
+      orgSelect.appendChild(opt);
+    }
+  }
+
+  async function loadCycles() {
+    const org = selectedOrg();
+    if (!org) return;
+
+    const resp = await fetch('/nps/cycles?org_id=' + encodeURIComponent(org));
+    const cycles = await resp.json();
+
+    document.getElementById('createCard').classList.remove('d-none');
+    document.getElementById('listCard').classList.remove('d-none');
+
+    cycleBody.innerHTML = '';
+    for (const c of cycles) {
+      const tr = document.createElement('tr');
+      const isActive = c.status === 'active';
+      const modeOptions = ['daily', 'alternate_day', 'weekly', 'manual']
+        .map(m => `<option value="${m}" ${c.reminder_mode === m ? 'selected' : ''}>${m}</option>`)
+        .join('');
+
+      tr.innerHTML = `
+        <td><small>${c.cycle_id}</small></td>
+        <td>${c.start_date}</td>
+        <td>${c.end_date}</td>
+        <td>${isActive ? '<span class="badge bg-success">Active</span>' : '<span class="badge bg-secondary">Closed</span>'}</td>
+        <td>
+          ${isActive
+            ? `<select class="form-select form-select-sm mode-select" data-cycleid="${c.cycle_id}">${modeOptions}</select>`
+            : c.reminder_mode}
+        </td>
+        <td>${c.last_reminder_at || '—'}</td>
+        <td>
+          ${isActive ? `<button class="btn btn-sm btn-outline-danger btn-close-cycle" data-cycleid="${c.cycle_id}">Close</button>` : ''}
+        </td>`;
+      cycleBody.appendChild(tr);
+    }
+    attachActions();
+  }
+
+  function attachActions() {
+    // Close cycle buttons
+    document.querySelectorAll('.btn-close-cycle').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Close this cycle?')) return;
+        const res = await postJson('/nps/cycles/close', {
+          org_id: selectedOrg(), cycle_id: this.dataset.cycleid
+        });
+        if (res.ok) loadCycles();
+        else alert('Error: ' + (res.data.error || 'Unknown'));
+      });
+    });
+
+    // Reminder mode selects
+    document.querySelectorAll('.mode-select').forEach(sel => {
+      sel.addEventListener('change', async function () {
+        const res = await postJson('/nps/cycles/reminder-config', {
+          org_id: selectedOrg(), cycle_id: this.dataset.cycleid, mode: this.value
+        });
+        if (!res.ok) alert('Error: ' + (res.data.error || 'Unknown'));
+      });
+    });
+  }
+
+  // Org form
+  document.getElementById('orgForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    loadCycles();
+  });
+
+  // Create cycle
+  document.getElementById('createForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const fd = new FormData(this);
+    const res = await postJson('/nps/cycles/create', {
+      org_id: selectedOrg(), start_date: fd.get('start_date'), end_date: fd.get('end_date')
+    });
+    const el = document.getElementById('createResult');
+    if (res.ok) {
+      el.innerHTML = '<div class="alert alert-success py-1">Cycle created.</div>';
+      this.reset();
+      loadCycles();
+    } else {
+      el.innerHTML = `<div class="alert alert-danger py-1">${res.data.error || 'Error'}</div>`;
+    }
+  });
+
+  loadOrgs();
+})();
+</script>
+{% endblock %}

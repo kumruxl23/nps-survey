@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+.kiro/
+infra/
+deploy_payload.txt
+SETUP_CHECKLIST.md

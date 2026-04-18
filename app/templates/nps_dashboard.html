@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}NPS Dashboard{% endblock %}
+
+{% block content %}
+<h2>NPS Dashboard</h2>
+
+<div id="loading" class="text-center my-4">
+  <div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div>
+</div>
+
+<div id="no-orgs" class="alert alert-info d-none">No active organizations configured.</div>
+
+<!-- Org tabs -->
+<ul class="nav nav-tabs d-none" id="orgTabs" role="tablist"></ul>
+<div class="tab-content mt-3" id="orgTabContent"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const loadingEl = document.getElementById('loading');
+  const noOrgsEl = document.getElementById('no-orgs');
+  const tabsEl = document.getElementById('orgTabs');
+  const contentEl = document.getElementById('orgTabContent');
+
+  async function fetchJson(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }
+
+  function pct(count, total) {
+    if (total === 0) return '0.0';
+    return ((count / total) * 100).toFixed(1);
+  }
+
+  function npsColor(score) {
+    if (score >= 50) return 'text-success';
+    if (score >= 0) return 'text-warning';
+    return 'text-danger';
+  }
+
+  function cycleName(s) {
+    return s.cycle_name || s.cycle_id;
+  }
+
+  function buildLeaderTable(leaders) {
+    if (!leaders || leaders.length === 0) {
+      return '<p class="text-muted">No leader-level data available.</p>';
+    }
+    let html = `
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5 class="card-title">Leader-Level NPS Breakdown</h5>
+        <table class="table table-sm table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>Leader</th>
+              <th class="text-center">Nominated</th>
+              <th class="text-center">Responded</th>
+              <th class="text-center">Pending</th>
+              <th class="text-center">Response Rate</th>
+              <th class="text-center text-success">Promoters</th>
+              <th class="text-center text-warning">Passives</th>
+              <th class="text-center text-danger">Detractors</th>
+              <th class="text-center">NPS Score</th>
+            </tr>
+          </thead>
+          <tbody>`;
+
+    for (const l of leaders) {
+      const rate = (l.response_rate * 100).toFixed(0);
+      const total = l.responded;
+      html += `
+            <tr>
+              <td><strong>${l.leader}</strong></td>
+              <td class="text-center">${l.nominated}</td>
+              <td class="text-center">${l.responded}</td>
+              <td class="text-center">${l.pending > 0 ? '<span class="badge bg-warning text-dark">' + l.pending + '</span>' : '<span class="badge bg-success">0</span>'}</td>
+              <td class="text-center">${rate}%</td>
+              <td class="text-center">${l.promoter_count} <small class="text-muted">(${pct(l.promoter_count, total)}%)</small></td>
+              <td class="text-center">${l.passive_count} <small class="text-muted">(${pct(l.passive_count, total)}%)</small></td>
+              <td class="text-center">${l.detractor_count} <small class="text-muted">(${pct(l.detractor_count, total)}%)</small></td>
+              <td class="text-center"><strong class="${npsColor(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td>
+            </tr>`;
+    }
+
+    html += `
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+    return html;
+  }
+
+  function buildOrgPane(org, summaries, leaders, isActive) {
+    const paneId = 'pane-' + org.org_id;
+    const activeClass = isActive ? 'show active' : '';
+    const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+
+    let html = `<div class="tab-pane fade ${activeClass}" id="${paneId}" role="tabpanel">`;
+
+    if (!latest) {
+      html += '<p class="text-muted">No survey cycles found for this organization.</p>';
+      html += '</div>';
+      return html;
+    }
+
+    const nps = latest.nps_score.toFixed(1);
+    const total = latest.total_responded;
+    const rateStr = (latest.response_rate * 100).toFixed(1);
+    const pending = latest.total_nominated - latest.total_responded;
+
+    // Overall summary cards
+    html += `
+      <h5 class="mb-3 text-muted">Current Cycle: ${cycleName(latest)}</h5>
+      <div class="row mb-4">
+        <div class="col-md-2">
+          <div class="card text-center border-0 shadow-sm">
+            <div class="card-body">
+              <h6 class="card-title text-muted">NPS Score</h6>
+              <p class="display-4 ${npsColor(latest.nps_score)}">${nps}</p>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-2">
+          <div class="card text-center border-0 shadow-sm">
+            <div class="card-body">
+              <h6 class="card-title text-muted">Response Rate</h6>
+              <p class="display-6">${rateStr}%</p>
+              <small class="text-muted">${latest.total_responded} / ${latest.total_nominated}</small>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-2">
+          <div class="card text-center border-0 shadow-sm">
+            <div class="card-body">
+              <h6 class="card-title text-muted">Pending</h6>
+              <p class="display-6 ${pending > 0 ? 'text-warning' : 'text-success'}">${pending}</p>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card border-0 shadow-sm">
+            <div class="card-body">
+              <h6 class="card-title text-muted">Overall Breakdown</h6>
+              <table class="table table-sm mb-0">
+                <thead><tr><th>Category</th><th>Count</th><th>%</th></tr></thead>
+                <tbody>
+                  <tr class="table-success">
+                    <td>Promoters (9-10)</td>
+                    <td>${latest.promoter_count}</td>
+                    <td>${pct(latest.promoter_count, total)}%</td>
+                  </tr>
+                  <tr class="table-warning">
+                    <td>Passives (7-8)</td>
+                    <td>${latest.passive_count}</td>
+                    <td>${pct(latest.passive_count, total)}%</td>
+                  </tr>
+                  <tr class="table-danger">
+                    <td>Detractors (0-6)</td>
+                    <td>${latest.detractor_count}</td>
+                    <td>${pct(latest.detractor_count, total)}%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    // Leader-level breakdown
+    html += buildLeaderTable(leaders);
+
+    // Trend table
+    if (summaries.length > 0) {
+      html += `
+      <div class="card mb-4">
+        <div class="card-body">
+          <h5 class="card-title">NPS Trend by Cycle</h5>
+          <table class="table table-striped table-sm">
+            <thead>
+              <tr>
+                <th>Cycle</th><th>NPS Score</th><th>Promoters</th><th>Passives</th>
+                <th>Detractors</th><th>Responses</th><th>Nominated</th><th>Response Rate</th>
+              </tr>
+            </thead>
+            <tbody>`;
+      for (const s of summaries) {
+        html += `
+              <tr>
+                <td>${cycleName(s)}</td>
+                <td><strong class="${npsColor(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
+                <td>${s.promoter_count}</td>
+                <td>${s.passive_count}</td>
+                <td>${s.detractor_count}</td>
+                <td>${s.total_responded}</td>
+                <td>${s.total_nominated}</td>
+                <td>${(s.response_rate * 100).toFixed(1)}%</td>
+              </tr>`;
+      }
+      html += `
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  async function loadDashboard() {
+    try {
+      const orgs = await fetchJson('/nps/orgs');
+      const activeOrgs = orgs.filter(o => o.is_active);
+
+      loadingEl.classList.add('d-none');
+
+      if (activeOrgs.length === 0) {
+        noOrgsEl.classList.remove('d-none');
+        return;
+      }
+
+      tabsEl.classList.remove('d-none');
+
+      for (let i = 0; i < activeOrgs.length; i++) {
+        const org = activeOrgs[i];
+        const isFirst = i === 0;
+        const paneId = 'pane-' + org.org_id;
+
+        const li = document.createElement('li');
+        li.className = 'nav-item';
+        li.setAttribute('role', 'presentation');
+        li.innerHTML = `<button class="nav-link ${isFirst ? 'active' : ''}" id="tab-${org.org_id}"
+          data-bs-toggle="tab" data-bs-target="#${paneId}" type="button"
+          role="tab">${org.org_name || org.org_id}</button>`;
+        tabsEl.appendChild(li);
+
+        // Fetch summaries
+        let summaries = [];
+        try {
+          summaries = await fetchJson('/nps/dashboard?org_id=' + encodeURIComponent(org.org_id));
+          if (!Array.isArray(summaries)) summaries = [summaries];
+        } catch (e) { summaries = []; }
+
+        // Fetch leader breakdown for the latest cycle
+        let leaders = [];
+        if (summaries.length > 0) {
+          const latestCycleId = summaries[summaries.length - 1].cycle_id;
+          try {
+            leaders = await fetchJson(
+              '/nps/dashboard/leaders?org_id=' + encodeURIComponent(org.org_id) +
+              '&cycle_id=' + encodeURIComponent(latestCycleId)
+            );
+          } catch (e) { leaders = []; }
+        }
+
+        contentEl.insertAdjacentHTML('beforeend', buildOrgPane(org, summaries, leaders, isFirst));
+      }
+    } catch (err) {
+      loadingEl.classList.add('d-none');
+      noOrgsEl.textContent = 'Error loading dashboard: ' + err.message;
+      noOrgsEl.classList.remove('d-none');
+      noOrgsEl.classList.replace('alert-info', 'alert-danger');
+    }
+  }
+
+  loadDashboard();
+})();
+</script>
+{% endblock %}
