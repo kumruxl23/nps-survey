@@ -122,21 +122,20 @@ def distribute_survey(org_id: str, cycle_id: str) -> DistributionResult:
     body = _build_survey_body(org.asana_form_url)
 
     from_address = os.environ.get("NPS_FROM_ADDRESS", "nps-survey@example.com")
-    result = email_client.send_bcc_email(
-        subject=_DISTRIBUTION_SUBJECT,
-        body=body,
-        bcc_recipients=bcc_recipients,
-        from_address=from_address,
-    )
 
-    now = datetime.now(timezone.utc).isoformat()
-
-    if result.ok:
-        nps_cycle_repo.update_cycle(org_id, cycle_id, distributed_at=now)
-        return DistributionResult(sent_count=len(bcc_recipients), failed_count=0)
-    else:
-        # Email send failed for the entire batch
-        for email_addr in bcc_recipients:
+    # Send individually per recipient so one failure doesn't block others
+    sent_count = 0
+    failed_count = 0
+    for email_addr in bcc_recipients:
+        result = email_client.send_bcc_email(
+            subject=_DISTRIBUTION_SUBJECT,
+            body=body,
+            bcc_recipients=[email_addr],
+            from_address=from_address,
+        )
+        if result.ok:
+            sent_count += 1
+        else:
             _log_failure(
                 org_id=org_id,
                 cycle_id=cycle_id,
@@ -145,9 +144,11 @@ def distribute_survey(org_id: str, cycle_id: str) -> DistributionResult:
                 event_type="distribution",
                 channel="email",
             )
-        # Still mark as distributed so we don't retry indefinitely
-        nps_cycle_repo.update_cycle(org_id, cycle_id, distributed_at=now)
-        return DistributionResult(sent_count=0, failed_count=len(bcc_recipients))
+            failed_count += 1
+
+    now = datetime.now(timezone.utc).isoformat()
+    nps_cycle_repo.update_cycle(org_id, cycle_id, distributed_at=now)
+    return DistributionResult(sent_count=sent_count, failed_count=failed_count)
 
 
 def send_reminder(
