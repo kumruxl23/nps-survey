@@ -85,18 +85,33 @@ def import_from_excel(
 
 
 def _parse_csv(file_bytes: bytes) -> list[dict]:
-    """Parse a CSV file into standardized name/email/leader/include dicts."""
-    text = file_bytes.decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(text))
-    fieldnames = reader.fieldnames or []
-    col_map = _detect_columns(fieldnames)
+    """Parse a CSV file into standardized name/email/leader/include dicts.
 
+    Handles duplicate column names by using positional detection.
+    """
+    text = file_bytes.decode("utf-8-sig")
+    lines = text.strip().split("\n")
+    if not lines:
+        raise ValueError("Empty CSV file")
+
+    # Parse header manually to handle duplicate column names
+    reader = csv.reader(io.StringIO(lines[0]))
+    raw_headers = next(reader)
+    raw_headers = [h.strip() for h in raw_headers]
+
+    # Detect columns by position
+    col_map = _detect_columns_positional(raw_headers)
+
+    # Parse data rows
+    data_reader = csv.reader(io.StringIO("\n".join(lines[1:])))
     rows = []
-    for row in reader:
-        name = row.get(col_map["name"], "").strip()
-        email = row.get(col_map["email"], "").strip()
-        leader = row.get(col_map.get("leader", ""), "").strip() if col_map.get("leader") else ""
-        include = row.get(col_map.get("include", ""), "yes").strip() if col_map.get("include") else "yes"
+    for row_values in data_reader:
+        if not row_values or all(not v.strip() for v in row_values):
+            continue
+        name = row_values[col_map["name_idx"]].strip() if col_map["name_idx"] < len(row_values) else ""
+        email = row_values[col_map["email_idx"]].strip() if col_map["email_idx"] < len(row_values) else ""
+        leader = row_values[col_map["leader_idx"]].strip() if col_map.get("leader_idx") is not None and col_map["leader_idx"] < len(row_values) else ""
+        include = row_values[col_map["include_idx"]].strip() if col_map.get("include_idx") is not None and col_map["include_idx"] < len(row_values) else "yes"
         if email:
             rows.append({"name": name, "email": email, "leader": leader, "include": include})
     return rows
@@ -133,65 +148,91 @@ def _parse_excel(file_bytes: bytes) -> list[dict]:
 
 
 def _detect_columns(headers: list[str]) -> dict:
-    """Auto-detect column mapping from headers.
+    """Auto-detect column mapping from headers. Used by Excel parser."""
+    positional = _detect_columns_positional(headers)
+    result = {}
+    result["name"] = headers[positional["name_idx"]]
+    result["email"] = headers[positional["email_idx"]]
+    if positional.get("leader_idx") is not None:
+        result["leader"] = headers[positional["leader_idx"]]
+    if positional.get("include_idx") is not None:
+        result["include"] = headers[positional["include_idx"]]
+    return result
 
-    Handles both standard format (Name, Email, Leader) and
-    Amazon NPS format (PoC, Stakeholder, Stakeholder Alias, etc.)
+
+def _detect_columns_positional(headers: list[str]) -> dict:
+    """Auto-detect column indices from headers.
+
+    Handles duplicate column names (e.g., two "Stakeholder" columns)
+    by using position-based detection.
+
+    Supports:
+    - Standard: Name, Email, Leader
+    - Amazon NPS: PoC, PoC Alias, Stakeholder, Stakeholder(alias), Should include...
     """
-    lower_map = {}
-    for h in headers:
-        key = h.lower().strip()
-        if key not in lower_map:  # first occurrence wins (handles duplicate "Stakeholder" columns)
-            lower_map[key] = h
-
+    lower_headers = [h.lower().strip() for h in headers]
     result = {}
 
-    # Detect email column: "Stakeholder Alias" or "Email" variants
-    for pattern in _EMAIL_PATTERNS:
-        for key, original in lower_map.items():
-            if pattern in key:
-                result["email"] = original
-                break
-        if "email" in result:
-            break
+    # Check for Amazon NPS format: PoC, PoC Alias, Stakeholder, Stakeholder(alias)
+    # Pattern: if we see "poc" and two "stakeholder" columns, it's the Amazon format
+    stakeholder_indices = [i for i, h in enumerate(lower_headers) if "stakeholder" in h and "included" not in h and "respond" not in h and "interact" not in h]
 
-    # Detect name column: "Stakeholder" (but not "Stakeholder Alias")
-    for pattern in _NAME_PATTERNS:
-        for key, original in lower_map.items():
-            if key == pattern or (pattern in key and "alias" not in key and "included" not in key and "respond" not in key and "interact" not in key):
-                result["name"] = original
+    if len(stakeholder_indices) >= 2:
+        # Amazon NPS format: first Stakeholder = name, second Stakeholder = alias/email
+        result["name_idx"] = stakeholder_indices[0]
+        result["email_idx"] = stakeholder_indices[1]
+        logger.info("Detected Amazon NPS format: name=col%d, email=col%d", stakeholder_indices[0], stakeholder_indices[1])
+    else:
+        # Standard format detection
+        # Find email column
+        email_idx = None
+        for pattern in _EMAIL_PATTERNS:
+            for i, h in enumerate(lower_headers):
+                if pattern in h:
+                    email_idx = i
+                    break
+            if email_idx is not None:
                 break
-        if "name" in result:
-            break
+        if email_idx is None:
+            raise ValueError(
+                f"Could not find email/alias column. Headers found: {headers}. "
+                f"Expected one of: {_EMAIL_PATTERNS} or two 'Stakeholder' columns."
+            )
+        result["email_idx"] = email_idx
 
-    # Detect leader column: "PoC" or "Leader"
+        # Find name column
+        name_idx = None
+        for pattern in _NAME_PATTERNS:
+            for i, h in enumerate(lower_headers):
+                if (h == pattern or (pattern in h and "alias" not in h and "included" not in h and "respond" not in h and "interact" not in h)) and i != email_idx:
+                    name_idx = i
+                    break
+            if name_idx is not None:
+                break
+        if name_idx is None:
+            raise ValueError(
+                f"Could not find name column. Headers found: {headers}. "
+                f"Expected one of: {_NAME_PATTERNS}"
+            )
+        result["name_idx"] = name_idx
+
+    # Find leader column (PoC)
     for pattern in _LEADER_PATTERNS:
-        for key, original in lower_map.items():
-            if key == pattern or (pattern in key and "alias" not in key):
-                result["leader"] = original
+        for i, h in enumerate(lower_headers):
+            if (h == pattern or (pattern in h and "alias" not in h)) and i != result.get("name_idx") and i != result.get("email_idx"):
+                result["leader_idx"] = i
                 break
-        if "leader" in result:
+        if "leader_idx" in result:
             break
 
-    # Detect include/exclude column
+    # Find include/exclude column
     for pattern in _INCLUDE_PATTERNS:
-        for key, original in lower_map.items():
-            if pattern in key:
-                result["include"] = original
+        for i, h in enumerate(lower_headers):
+            if pattern in h:
+                result["include_idx"] = i
                 break
-        if "include" in result:
+        if "include_idx" in result:
             break
 
-    if "email" not in result:
-        raise ValueError(
-            f"Could not find email/alias column. Headers found: {headers}. "
-            f"Expected one of: {_EMAIL_PATTERNS}"
-        )
-    if "name" not in result:
-        raise ValueError(
-            f"Could not find name column. Headers found: {headers}. "
-            f"Expected one of: {_NAME_PATTERNS}"
-        )
-
-    logger.info("Detected columns: %s", result)
+    logger.info("Column mapping: %s (from headers: %s)", result, headers)
     return result
