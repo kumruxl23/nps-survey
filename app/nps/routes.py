@@ -253,7 +253,8 @@ def create_cycle():
         end_date = data.get("end_date", "")
         if not all([org_id, start_date, end_date]):
             return jsonify({"error": "org_id, start_date, and end_date are required"}), 400
-        cycle = nps_cycle_service.create_cycle(org_id, start_date, end_date)
+        cycle_name = data.get("cycle_name", "")
+        cycle = nps_cycle_service.create_cycle(org_id, start_date, end_date, cycle_name=cycle_name)
         return jsonify(vars(cycle)), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400

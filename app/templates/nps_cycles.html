@@ -26,11 +26,15 @@
   <div class="card-header">Create New Cycle</div>
   <div class="card-body">
     <form id="createForm" class="row g-2 align-items-end">
-      <div class="col-md-4">
+      <div class="col-md-3">
+        <label class="form-label">Cycle Name</label>
+        <input type="text" class="form-control" name="cycle_name" placeholder="e.g. Q2 2025" required>
+      </div>
+      <div class="col-md-3">
         <label class="form-label">Start Date</label>
         <input type="date" class="form-control" name="start_date" required>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">End Date</label>
         <input type="date" class="form-control" name="end_date" required>
       </div>
@@ -105,7 +109,7 @@
         .join('');
 
       tr.innerHTML = `
-        <td><small>${c.cycle_id}</small></td>
+        <td><small>${c.cycle_name || c.cycle_id}</small></td>
         <td>${c.start_date}</td>
         <td>${c.end_date}</td>
         <td>${isActive ? '<span class="badge bg-success">Active</span>' : '<span class="badge bg-secondary">Closed</span>'}</td>
@@ -206,7 +210,7 @@
     e.preventDefault();
     const fd = new FormData(this);
     const res = await postJson('/nps/cycles/create', {
-      org_id: selectedOrg(), start_date: fd.get('start_date'), end_date: fd.get('end_date')
+      org_id: selectedOrg(), start_date: fd.get('start_date'), end_date: fd.get('end_date'), cycle_name: fd.get('cycle_name')
     });
     const el = document.getElementById('createResult');
     if (res.ok) {
