@@ -346,6 +346,45 @@ def send_reminder():
 
 
 # ---------------------------------------------------------------------------
+# Manual response recording
+# ---------------------------------------------------------------------------
+
+
+@nps_bp.route("/responses/record", methods=["POST"])
+@role_required("admin", "editor")
+def record_response():
+    """Manually record an NPS response for a stakeholder."""
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        cycle_id = data.get("cycle_id", "")
+        email = data.get("email", "")
+        nps_score = data.get("nps_score")
+        if not all([org_id, cycle_id, email]) or nps_score is None:
+            return jsonify({"error": "org_id, cycle_id, email, and nps_score are required"}), 400
+        nps_response_service.process_response({
+            "org_id": org_id,
+            "cycle_id": cycle_id,
+            "email": email,
+            "nps_score": int(nps_score),
+            "task_gid": "manual_entry",
+        })
+        return jsonify({"status": "recorded", "email": email, "nps_score": nps_score})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error recording response")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/responses/view", methods=["GET"])
+@role_required("admin", "editor")
+def responses_view():
+    """Render the responses management page."""
+    return render_template("nps_responses.html")
+
+
+# ---------------------------------------------------------------------------
 # ASANA webhook route
 # ---------------------------------------------------------------------------
 

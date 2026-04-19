@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Record Responses{% endblock %}
+
+{% block content %}
+<h2>Record NPS Responses</h2>
+
+<!-- Org/Cycle selector -->
+<div class="card mb-4">
+  <div class="card-body">
+    <form id="selectorForm" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Organization</label>
+        <select class="form-select" id="orgSelect" required>
+          <option value="">Select org...</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Survey Cycle</label>
+        <select class="form-select" id="cycleSelect" required>
+          <option value="">Select cycle...</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <button type="submit" class="btn btn-primary">Load Stakeholders</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Stakeholder list with score entry -->
+<div class="card d-none" id="listCard">
+  <div class="card-header">
+    Stakeholders
+    <span id="statsBar" class="ms-3 small text-muted"></span>
+  </div>
+  <div class="card-body">
+    <table class="table table-sm table-hover">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Leader</th>
+          <th>Responded</th>
+          <th style="width:120px">NPS Score (0-10)</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="stakeholderBody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const orgSelect = document.getElementById('orgSelect');
+  const cycleSelect = document.getElementById('cycleSelect');
+  const tbody = document.getElementById('stakeholderBody');
+  let currentOrg = '', currentCycle = '';
+
+  async function postJson(url, data) {
+    const resp = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    return { ok: resp.ok, data: await resp.json() };
+  }
+
+  async function loadOrgs() {
+    const resp = await fetch('/nps/orgs');
+    const orgs = await resp.json();
+    for (const o of orgs.filter(x => x.is_active)) {
+      const opt = document.createElement('option');
+      opt.value = o.org_id;
+      opt.textContent = o.org_name || o.org_id;
+      orgSelect.appendChild(opt);
+    }
+  }
+
+  orgSelect.addEventListener('change', async function () {
+    cycleSelect.innerHTML = '<option value="">Select cycle...</option>';
+    if (!this.value) return;
+    const resp = await fetch('/nps/cycles?org_id=' + encodeURIComponent(this.value));
+    const cycles = await resp.json();
+    for (const c of cycles) {
+      const opt = document.createElement('option');
+      opt.value = c.cycle_id;
+      opt.textContent = (c.cycle_name || c.start_date + ' to ' + c.end_date) + ' (' + c.status + ')';
+      cycleSelect.appendChild(opt);
+    }
+  });
+
+  async function loadStakeholders() {
+    currentOrg = orgSelect.value;
+    currentCycle = cycleSelect.value;
+    if (!currentOrg || !currentCycle) return;
+
+    const resp = await fetch('/nps/nominations?org_id=' + encodeURIComponent(currentOrg) + '&cycle_id=' + encodeURIComponent(currentCycle));
+    const noms = await resp.json();
+
+    document.getElementById('listCard').classList.remove('d-none');
+
+    const responded = noms.filter(n => n.responded).length;
+    const pending = noms.length - responded;
+    document.getElementById('statsBar').textContent = `Total: ${noms.length} | Responded: ${responded} | Pending: ${pending}`;
+
+    tbody.innerHTML = '';
+    for (const n of noms) {
+      const tr = document.createElement('tr');
+      tr.className = n.responded ? 'table-success' : '';
+      tr.innerHTML = `
+        <td>${n.name}</td>
+        <td>${n.email}</td>
+        <td>${n.leader || '—'}</td>
+        <td>${n.responded ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-warning text-dark">No</span>'}</td>
+        <td>${n.responded ? '—' : '<input type="number" class="form-control form-control-sm score-input" min="0" max="10" data-email="' + n.email + '">'}</td>
+        <td>${n.responded ? '' : '<button class="btn btn-sm btn-success btn-record" data-email="' + n.email + '">Record</button>'}</td>`;
+      tbody.appendChild(tr);
+    }
+    attachRecordHandlers();
+  }
+
+  function attachRecordHandlers() {
+    document.querySelectorAll('.btn-record').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        const email = this.dataset.email;
+        const input = document.querySelector('.score-input[data-email="' + email + '"]');
+        const score = input ? parseInt(input.value) : NaN;
+        if (isNaN(score) || score < 0 || score > 10) {
+          alert('Enter a valid score between 0 and 10');
+          return;
+        }
+        this.disabled = true;
+        this.textContent = 'Saving...';
+        const res = await postJson('/nps/responses/record', {
+          org_id: currentOrg, cycle_id: currentCycle, email: email, nps_score: score
+        });
+        if (res.ok) {
+          loadStakeholders();
+        } else {
+          alert('Error: ' + (res.data.error || 'Unknown'));
+          this.disabled = false;
+          this.textContent = 'Record';
+        }
+      });
+    });
+  }
+
+  document.getElementById('selectorForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    loadStakeholders();
+  });
+
+  loadOrgs();
+})();
+</script>
+{% endblock %}
