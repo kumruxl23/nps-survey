@@ -1,0 +1,98 @@
+{
+  "pipeline_version": "2.0",
+  "created_at": "2026-04-21T12:00:00.000000+00:00",
+
+  "config": {
+    "labels": ["associate", "backpack_purse", "package_asin", "stepladder", "tote", "trashbin"],
+    "num_sampled_frames": 17,
+    "sam2_model": "sam2.1_hiera_small",
+    "resize_factor": 0.5,
+    "video_fps": 15,
+    "source_prefix": "s3://drishti-lab/area-organization-science/prod/.../object_fall",
+    "output_prefix": "s3://drishti-lab/area-organization-science/output/object_fall"
+  },
+
+  "instances": {
+    "chunk_1774550710-1774550720s": {
+      "instance_id": "chunk_1774550710-1774550720s",
+      "cameras": {
+        "000E": {
+          "camera_id": "000E",
+          "width": 1120,
+          "height": 864,
+          "total_frames": 150,
+
+          "sampled_indices": [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144],
+
+          "sampled_frame_uris": [
+            "s3://drishti-lab/.../000E/IMG_20260326_143012_000.jpg",
+            "s3://drishti-lab/.../000E/IMG_20260326_143012_009.jpg",
+            "s3://drishti-lab/.../000E/IMG_20260326_143012_018.jpg",
+            "... (17 total — original source filenames, the frames workers annotated)"
+          ],
+
+          "frame_name_mapping": {
+            "IMG_20260326_143012_000.jpg": {
+              "sampled_index": 0,
+              "source_frame_index": 0,
+              "renamed_to": "frame_000000.jpg",
+              "overlay_uri": "s3://drishti-lab/.../overlay_frames/.../frame_0000.jpg"
+            },
+            "IMG_20260326_143012_009.jpg": {
+              "sampled_index": 1,
+              "source_frame_index": 9,
+              "renamed_to": "frame_000009.jpg",
+              "overlay_uri": "s3://drishti-lab/.../overlay_frames/.../frame_0009.jpg"
+            }
+          },
+
+          "objects": [
+            {
+              "label": "stepladder",
+              "tracking_id": "stepladder#1",
+              "source": "original",
+              "status": "pending",
+              "tracked_frames": 150,
+              "total_frames": 150,
+              "masks_s3_prefix": "s3://drishti-lab/.../masks/.../stepladder_stepladder#1/",
+
+              "frame_annotations": {
+                "0": {
+                  "bbox": [506, 312, 68, 178],
+                  "area": 7284,
+                  "has_mask": true,
+                  "metadata": {
+                    "is_person_on_stepladder": "False",
+                    "is_3_point_touch_initiated_in_sequence": "False",
+                    "is_ascending": "False",
+                    "is_descending": "False",
+                    "is_hand_on_left_handrail": "False",
+                    "is_hand_on_right_handrail": "False",
+                    "is_hand_on_top_bar": "False"
+                  }
+                },
+                "1": {
+                  "bbox": [506, 312, 66, 176],
+                  "area": 6812,
+                  "has_mask": true,
+                  "metadata": {
+                    "is_person_on_stepladder": "False",
+                    "is_ascending": "False",
+                    "is_descending": "False",
+                    "is_hand_on_left_handrail": "False",
+                    "is_hand_on_right_handrail": "False",
+                    "is_hand_on_top_bar": "False",
+                    "is_3_point_touch_initiated_in_sequence": "False"
+                  }
+                },
+                "___NOTE___": "All 150 frames present. The 17 in sampled_indices were human-annotated; rest are SAM2-propagated. Metadata is the FINAL corrected version (annotator → validator → verifier)."
+              }
+            }
+          ],
+
+          "overlay_video": "s3://drishti-lab/.../overlay_videos/.../overlay_video.mp4"
+        }
+      }
+    }
+  }
+}

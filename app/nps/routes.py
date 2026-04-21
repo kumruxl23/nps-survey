@@ -384,6 +384,18 @@ def responses_view():
     return render_template("nps_responses.html")
 
 
+@nps_bp.route("/dashboard/summary", methods=["GET"])
+@login_required
+def dashboard_summary():
+    """Return cross-org NPS summary data."""
+    try:
+        data = nps_dashboard_service.compute_cross_org_summary()
+        return jsonify(data)
+    except Exception as exc:
+        logger.exception("Error computing cross-org summary")
+        return jsonify({"error": str(exc)}), 500
+
+
 # ---------------------------------------------------------------------------
 # ASANA webhook route
 # ---------------------------------------------------------------------------

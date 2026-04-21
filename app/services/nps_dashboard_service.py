@@ -149,3 +149,87 @@ def compute_nps_by_leader(org_id: str, cycle_id: str) -> list[dict]:
         })
 
     return result
+
+
+def compute_cross_org_summary() -> dict:
+    """Compute a combined NPS summary across all active orgs.
+
+    Returns a dict with overall NPS, per-org breakdown, and totals.
+    """
+    from app.services import nps_org_config_service, nps_cycle_service
+
+    active_orgs = nps_org_config_service.list_active_orgs()
+
+    total_nominated = 0
+    total_responded = 0
+    total_promoters = 0
+    total_passives = 0
+    total_detractors = 0
+    org_summaries = []
+
+    for org in active_orgs:
+        cycle = nps_cycle_service.get_active_cycle(org.org_id)
+        if not cycle:
+            # Try latest cycle
+            cycles = nps_cycle_service.list_cycles(org.org_id)
+            if cycles:
+                cycle = cycles[-1]
+            else:
+                org_summaries.append({
+                    "org_id": org.org_id,
+                    "org_name": org.org_name,
+                    "cycle_name": "No cycles",
+                    "nps_score": 0,
+                    "total_nominated": 0,
+                    "total_responded": 0,
+                    "response_rate": 0,
+                    "promoter_count": 0,
+                    "passive_count": 0,
+                    "detractor_count": 0,
+                })
+                continue
+
+        s = compute_nps(org.org_id, cycle.cycle_id)
+        s.cycle_name = getattr(cycle, "cycle_name", "") or f"{cycle.start_date} to {cycle.end_date}"
+
+        total_nominated += s.total_nominated
+        total_responded += s.total_responded
+        total_promoters += s.promoter_count
+        total_passives += s.passive_count
+        total_detractors += s.detractor_count
+
+        org_summaries.append({
+            "org_id": org.org_id,
+            "org_name": org.org_name,
+            "cycle_name": s.cycle_name,
+            "nps_score": round(s.nps_score, 1),
+            "total_nominated": s.total_nominated,
+            "total_responded": s.total_responded,
+            "response_rate": round(s.response_rate, 4),
+            "promoter_count": s.promoter_count,
+            "passive_count": s.passive_count,
+            "detractor_count": s.detractor_count,
+        })
+
+    if total_responded > 0:
+        overall_nps = ((total_promoters - total_detractors) / total_responded) * 100
+    else:
+        overall_nps = 0.0
+
+    if total_nominated > 0:
+        overall_response_rate = total_responded / total_nominated
+    else:
+        overall_response_rate = 0.0
+
+    return {
+        "overall_nps": round(overall_nps, 1),
+        "total_nominated": total_nominated,
+        "total_responded": total_responded,
+        "total_pending": total_nominated - total_responded,
+        "overall_response_rate": round(overall_response_rate, 4),
+        "total_promoters": total_promoters,
+        "total_passives": total_passives,
+        "total_detractors": total_detractors,
+        "org_count": len(active_orgs),
+        "org_summaries": org_summaries,
+    }

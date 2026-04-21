@@ -7,13 +7,10 @@
 <div id="loading" class="text-center my-4">
   <div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div>
 </div>
-
 <div id="no-orgs" class="alert alert-info d-none">No active organizations configured.</div>
 
-<!-- Org tabs -->
 <ul class="nav nav-tabs d-none" id="orgTabs" role="tablist"></ul>
 <div class="tab-content mt-3" id="orgTabContent"></div>
-
 {% endblock %}
 
 {% block scripts %}
@@ -29,247 +26,200 @@
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return resp.json();
   }
+  function pct(c, t) { return t === 0 ? '0.0' : ((c / t) * 100).toFixed(1); }
+  function npsColor(s) { return s >= 50 ? 'text-success' : s >= 0 ? 'text-warning' : 'text-danger'; }
+  function cycleName(s) { return s.cycle_name || (s.start_date && s.end_date ? s.start_date+' to '+s.end_date : (s.cycle_id||'').substring(0,8)+'...'); }
 
-  function pct(count, total) {
-    if (total === 0) return '0.0';
-    return ((count / total) * 100).toFixed(1);
+  function addTab(id, label, isActive) {
+    const li = document.createElement('li');
+    li.className = 'nav-item';
+    li.innerHTML = `<button class="nav-link ${isActive?'active':''}" data-bs-toggle="tab" data-bs-target="#${id}" type="button" role="tab">${label}</button>`;
+    tabsEl.appendChild(li);
   }
 
-  function npsColor(score) {
-    if (score >= 50) return 'text-success';
-    if (score >= 0) return 'text-warning';
-    return 'text-danger';
-  }
+  // ── Summary tab (All Orgs) ──
+  function buildSummaryPane(data, isActive) {
+    const ac = isActive ? 'show active' : '';
+    const nps = data.overall_nps;
+    const rate = (data.overall_response_rate * 100).toFixed(1);
+    const t = data.total_responded;
 
-  function cycleName(s) {
-    if (s.cycle_name) return s.cycle_name;
-    // Fallback: show date range if available, otherwise short UUID
-    if (s.start_date && s.end_date) return s.start_date + ' to ' + s.end_date;
-    return s.cycle_id.substring(0, 8) + '...';
-  }
-
-  function buildLeaderTable(leaders) {
-    if (!leaders || leaders.length === 0) {
-      return '<p class="text-muted">No leader-level data available.</p>';
-    }
-    let html = `
-    <div class="card mb-4">
-      <div class="card-body">
-        <h5 class="card-title">Leader-Level NPS Breakdown</h5>
-        <table class="table table-sm table-hover">
-          <thead class="table-light">
-            <tr>
-              <th>Leader</th>
-              <th class="text-center">Nominated</th>
-              <th class="text-center">Responded</th>
-              <th class="text-center">Pending</th>
-              <th class="text-center">Response Rate</th>
-              <th class="text-center text-success">Promoters</th>
-              <th class="text-center text-warning">Passives</th>
-              <th class="text-center text-danger">Detractors</th>
-              <th class="text-center">NPS Score</th>
-            </tr>
-          </thead>
-          <tbody>`;
-
-    for (const l of leaders) {
-      const rate = (l.response_rate * 100).toFixed(0);
-      const total = l.responded;
-      html += `
-            <tr>
-              <td><strong>${l.leader}</strong></td>
-              <td class="text-center">${l.nominated}</td>
-              <td class="text-center">${l.responded}</td>
-              <td class="text-center">${l.pending > 0 ? '<span class="badge bg-warning text-dark">' + l.pending + '</span>' : '<span class="badge bg-success">0</span>'}</td>
-              <td class="text-center">${rate}%</td>
-              <td class="text-center">${l.promoter_count} <small class="text-muted">(${pct(l.promoter_count, total)}%)</small></td>
-              <td class="text-center">${l.passive_count} <small class="text-muted">(${pct(l.passive_count, total)}%)</small></td>
-              <td class="text-center">${l.detractor_count} <small class="text-muted">(${pct(l.detractor_count, total)}%)</small></td>
-              <td class="text-center"><strong class="${npsColor(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td>
-            </tr>`;
-    }
-
-    html += `
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-    return html;
-  }
-
-  function buildOrgPane(org, summaries, leaders, isActive) {
-    const paneId = 'pane-' + org.org_id;
-    const activeClass = isActive ? 'show active' : '';
-    const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
-
-    let html = `<div class="tab-pane fade ${activeClass}" id="${paneId}" role="tabpanel">`;
-
-    if (!latest) {
-      html += '<p class="text-muted">No survey cycles found for this organization.</p>';
-      html += '</div>';
-      return html;
-    }
-
-    const nps = latest.nps_score.toFixed(1);
-    const total = latest.total_responded;
-    const rateStr = (latest.response_rate * 100).toFixed(1);
-    const pending = latest.total_nominated - latest.total_responded;
-
-    // Overall summary cards
-    html += `
-      <h5 class="mb-3 text-muted">Current Cycle: ${cycleName(latest)}</h5>
+    let html = `<div class="tab-pane fade ${ac}" id="pane-summary" role="tabpanel">
       <div class="row mb-4">
-        <div class="col-md-2">
-          <div class="card text-center border-0 shadow-sm">
-            <div class="card-body">
-              <h6 class="card-title text-muted">NPS Score</h6>
-              <p class="display-4 ${npsColor(latest.nps_score)}">${nps}</p>
-            </div>
-          </div>
-        </div>
-        <div class="col-md-2">
-          <div class="card text-center border-0 shadow-sm">
-            <div class="card-body">
-              <h6 class="card-title text-muted">Response Rate</h6>
-              <p class="display-6">${rateStr}%</p>
-              <small class="text-muted">${latest.total_responded} / ${latest.total_nominated}</small>
-            </div>
-          </div>
-        </div>
-        <div class="col-md-2">
-          <div class="card text-center border-0 shadow-sm">
-            <div class="card-body">
-              <h6 class="card-title text-muted">Pending</h6>
-              <p class="display-6 ${pending > 0 ? 'text-warning' : 'text-success'}">${pending}</p>
-            </div>
-          </div>
-        </div>
-        <div class="col-md-6">
-          <div class="card border-0 shadow-sm">
-            <div class="card-body">
-              <h6 class="card-title text-muted">Overall Breakdown</h6>
-              <table class="table table-sm mb-0">
-                <thead><tr><th>Category</th><th>Count</th><th>%</th></tr></thead>
-                <tbody>
-                  <tr class="table-success">
-                    <td>Promoters (9-10)</td>
-                    <td>${latest.promoter_count}</td>
-                    <td>${pct(latest.promoter_count, total)}%</td>
-                  </tr>
-                  <tr class="table-warning">
-                    <td>Passives (7-8)</td>
-                    <td>${latest.passive_count}</td>
-                    <td>${pct(latest.passive_count, total)}%</td>
-                  </tr>
-                  <tr class="table-danger">
-                    <td>Detractors (0-6)</td>
-                    <td>${latest.detractor_count}</td>
-                    <td>${pct(latest.detractor_count, total)}%</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>`;
-
-    // Leader-level breakdown
-    html += buildLeaderTable(leaders);
-
-    // Trend table
-    if (summaries.length > 0) {
-      html += `
-      <div class="card mb-4">
-        <div class="card-body">
-          <h5 class="card-title">NPS Trend by Cycle</h5>
-          <table class="table table-striped table-sm">
-            <thead>
-              <tr>
-                <th>Cycle</th><th>NPS Score</th><th>Promoters</th><th>Passives</th>
-                <th>Detractors</th><th>Responses</th><th>Nominated</th><th>Response Rate</th>
-              </tr>
-            </thead>
-            <tbody>`;
-      for (const s of summaries) {
-        html += `
-              <tr>
-                <td>${cycleName(s)}</td>
-                <td><strong class="${npsColor(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
-                <td>${s.promoter_count}</td>
-                <td>${s.passive_count}</td>
-                <td>${s.detractor_count}</td>
-                <td>${s.total_responded}</td>
-                <td>${s.total_nominated}</td>
-                <td>${(s.response_rate * 100).toFixed(1)}%</td>
-              </tr>`;
-      }
-      html += `
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Combined NPS</h6>
+          <p class="display-4 ${npsColor(nps)}">${nps}</p>
+        </div></div></div>
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Response Rate</h6>
+          <p class="display-6">${rate}%</p>
+          <small class="text-muted">${data.total_responded} / ${data.total_nominated}</small>
+        </div></div></div>
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Pending</h6>
+          <p class="display-6 ${data.total_pending>0?'text-warning':'text-success'}">${data.total_pending}</p>
+        </div></div></div>
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Orgs</h6>
+          <p class="display-6">${data.org_count}</p>
+        </div></div></div>
+        <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Combined Breakdown</h6>
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Category</th><th>Count</th><th>%</th></tr></thead>
+            <tbody>
+              <tr class="table-success"><td>Promoters</td><td>${data.total_promoters}</td><td>${pct(data.total_promoters,t)}%</td></tr>
+              <tr class="table-warning"><td>Passives</td><td>${data.total_passives}</td><td>${pct(data.total_passives,t)}%</td></tr>
+              <tr class="table-danger"><td>Detractors</td><td>${data.total_detractors}</td><td>${pct(data.total_detractors,t)}%</td></tr>
             </tbody>
           </table>
-        </div>
+        </div></div></div>
       </div>`;
-    }
 
+    // Per-org comparison table
+    if (data.org_summaries && data.org_summaries.length > 0) {
+      html += `<div class="card mb-4"><div class="card-body">
+        <h5>Per-Organization Comparison</h5>
+        <table class="table table-sm table-hover">
+          <thead class="table-light"><tr>
+            <th>Organization</th><th>Cycle</th><th class="text-center">NPS Score</th>
+            <th class="text-center">Nominated</th><th class="text-center">Responded</th>
+            <th class="text-center">Pending</th><th class="text-center">Response Rate</th>
+            <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th><th class="text-center text-danger">D</th>
+          </tr></thead><tbody>`;
+      for (const o of data.org_summaries) {
+        const p = o.total_nominated - o.total_responded;
+        html += `<tr>
+          <td><strong>${o.org_name}</strong></td>
+          <td>${o.cycle_name}</td>
+          <td class="text-center"><strong class="${npsColor(o.nps_score)}">${o.nps_score}</strong></td>
+          <td class="text-center">${o.total_nominated}</td>
+          <td class="text-center">${o.total_responded}</td>
+          <td class="text-center">${p>0?'<span class="badge bg-warning text-dark">'+p+'</span>':'<span class="badge bg-success">0</span>'}</td>
+          <td class="text-center">${(o.response_rate*100).toFixed(0)}%</td>
+          <td class="text-center">${o.promoter_count}</td>
+          <td class="text-center">${o.passive_count}</td>
+          <td class="text-center">${o.detractor_count}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div></div>`;
+    }
     html += '</div>';
     return html;
   }
 
+  // ── Org-specific tab ──
+  function buildLeaderTable(leaders) {
+    if (!leaders || !leaders.length) return '<p class="text-muted">No leader-level data.</p>';
+    let h = `<div class="card mb-4"><div class="card-body"><h5>Leader-Level Breakdown</h5>
+      <table class="table table-sm table-hover"><thead class="table-light"><tr>
+        <th>Leader</th><th class="text-center">Nom</th><th class="text-center">Resp</th>
+        <th class="text-center">Pend</th><th class="text-center">Rate</th>
+        <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
+        <th class="text-center text-danger">D</th><th class="text-center">NPS</th>
+      </tr></thead><tbody>`;
+    for (const l of leaders) {
+      h += `<tr><td><strong>${l.leader}</strong></td>
+        <td class="text-center">${l.nominated}</td><td class="text-center">${l.responded}</td>
+        <td class="text-center">${l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'0'}</td>
+        <td class="text-center">${(l.response_rate*100).toFixed(0)}%</td>
+        <td class="text-center">${l.promoter_count} <small class="text-muted">(${pct(l.promoter_count,l.responded)}%)</small></td>
+        <td class="text-center">${l.passive_count} <small class="text-muted">(${pct(l.passive_count,l.responded)}%)</small></td>
+        <td class="text-center">${l.detractor_count} <small class="text-muted">(${pct(l.detractor_count,l.responded)}%)</small></td>
+        <td class="text-center"><strong class="${npsColor(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td></tr>`;
+    }
+    h += '</tbody></table></div></div>';
+    return h;
+  }
+
+  function buildOrgPane(org, summaries, leaders, isActive) {
+    const ac = isActive ? 'show active' : '';
+    const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+    let html = `<div class="tab-pane fade ${ac}" id="pane-${org.org_id}" role="tabpanel">`;
+    if (!latest) { html += '<p class="text-muted">No survey cycles found.</p></div>'; return html; }
+
+    const nps = latest.nps_score.toFixed(1);
+    const t = latest.total_responded;
+    const rate = (latest.response_rate * 100).toFixed(1);
+    const pend = latest.total_nominated - latest.total_responded;
+
+    html += `<h5 class="mb-3 text-muted">Current Cycle: ${cycleName(latest)}</h5>
+      <div class="row mb-4">
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">NPS Score</h6><p class="display-4 ${npsColor(latest.nps_score)}">${nps}</p>
+        </div></div></div>
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Response Rate</h6><p class="display-6">${rate}%</p>
+          <small class="text-muted">${t} / ${latest.total_nominated}</small>
+        </div></div></div>
+        <div class="col-md-2"><div class="card text-center border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Pending</h6><p class="display-6 ${pend>0?'text-warning':'text-success'}">${pend}</p>
+        </div></div></div>
+        <div class="col-md-6"><div class="card border-0 shadow-sm"><div class="card-body">
+          <h6 class="text-muted">Breakdown</h6>
+          <table class="table table-sm mb-0"><thead><tr><th>Category</th><th>Count</th><th>%</th></tr></thead><tbody>
+            <tr class="table-success"><td>Promoters (9-10)</td><td>${latest.promoter_count}</td><td>${pct(latest.promoter_count,t)}%</td></tr>
+            <tr class="table-warning"><td>Passives (7-8)</td><td>${latest.passive_count}</td><td>${pct(latest.passive_count,t)}%</td></tr>
+            <tr class="table-danger"><td>Detractors (0-6)</td><td>${latest.detractor_count}</td><td>${pct(latest.detractor_count,t)}%</td></tr>
+          </tbody></table>
+        </div></div></div>
+      </div>`;
+    html += buildLeaderTable(leaders);
+
+    if (summaries.length > 0) {
+      html += `<div class="card mb-4"><div class="card-body"><h5>NPS Trend by Cycle</h5>
+        <table class="table table-striped table-sm"><thead><tr>
+          <th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th>
+        </tr></thead><tbody>`;
+      for (const s of summaries) {
+        html += `<tr><td>${cycleName(s)}</td><td><strong class="${npsColor(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
+          <td>${s.promoter_count}</td><td>${s.passive_count}</td><td>${s.detractor_count}</td>
+          <td>${s.total_responded}</td><td>${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(1)}%</td></tr>`;
+      }
+      html += '</tbody></table></div></div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // ── Load everything ──
   async function loadDashboard() {
     try {
       const orgs = await fetchJson('/nps/orgs');
       const activeOrgs = orgs.filter(o => o.is_active);
-
       loadingEl.classList.add('d-none');
-
-      if (activeOrgs.length === 0) {
-        noOrgsEl.classList.remove('d-none');
-        return;
-      }
-
+      if (!activeOrgs.length) { noOrgsEl.classList.remove('d-none'); return; }
       tabsEl.classList.remove('d-none');
 
+      // Summary tab first
+      addTab('pane-summary', 'All Orgs Summary', true);
+      const summaryData = await fetchJson('/nps/dashboard/summary');
+      contentEl.insertAdjacentHTML('beforeend', buildSummaryPane(summaryData, true));
+
+      // Individual org tabs
       for (let i = 0; i < activeOrgs.length; i++) {
         const org = activeOrgs[i];
-        const isFirst = i === 0;
-        const paneId = 'pane-' + org.org_id;
+        addTab('pane-' + org.org_id, org.org_name || org.org_id, false);
 
-        const li = document.createElement('li');
-        li.className = 'nav-item';
-        li.setAttribute('role', 'presentation');
-        li.innerHTML = `<button class="nav-link ${isFirst ? 'active' : ''}" id="tab-${org.org_id}"
-          data-bs-toggle="tab" data-bs-target="#${paneId}" type="button"
-          role="tab">${org.org_name || org.org_id}</button>`;
-        tabsEl.appendChild(li);
-
-        // Fetch summaries
         let summaries = [];
-        try {
-          summaries = await fetchJson('/nps/dashboard?org_id=' + encodeURIComponent(org.org_id));
+        try { summaries = await fetchJson('/nps/dashboard?org_id=' + encodeURIComponent(org.org_id));
           if (!Array.isArray(summaries)) summaries = [summaries];
-        } catch (e) { summaries = []; }
+        } catch(e) {}
 
-        // Fetch leader breakdown for the latest cycle
         let leaders = [];
         if (summaries.length > 0) {
-          const latestCycleId = summaries[summaries.length - 1].cycle_id;
-          try {
-            leaders = await fetchJson(
-              '/nps/dashboard/leaders?org_id=' + encodeURIComponent(org.org_id) +
-              '&cycle_id=' + encodeURIComponent(latestCycleId)
-            );
-          } catch (e) { leaders = []; }
+          try { leaders = await fetchJson('/nps/dashboard/leaders?org_id=' + encodeURIComponent(org.org_id) + '&cycle_id=' + encodeURIComponent(summaries[summaries.length-1].cycle_id));
+          } catch(e) {}
         }
-
-        contentEl.insertAdjacentHTML('beforeend', buildOrgPane(org, summaries, leaders, isFirst));
+        contentEl.insertAdjacentHTML('beforeend', buildOrgPane(org, summaries, leaders, false));
       }
     } catch (err) {
       loadingEl.classList.add('d-none');
-      noOrgsEl.textContent = 'Error loading dashboard: ' + err.message;
+      noOrgsEl.textContent = 'Error: ' + err.message;
       noOrgsEl.classList.remove('d-none');
       noOrgsEl.classList.replace('alert-info', 'alert-danger');
     }
   }
-
   loadDashboard();
 })();
 </script>
