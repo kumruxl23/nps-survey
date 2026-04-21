@@ -1,54 +1,42 @@
 {% extends "base.html" %}
 {% block title %}NPS Dashboard{% endblock %}
-
-{% block titlebar %}
-<div class="whs-title-bar">
-  <h2>NPS Survey Dashboard</h2>
-</div>
-{% endblock %}
+{% block page_title %}NPS Survey Dashboard{% endblock %}
 
 {% block content %}
+<div id="loading" class="text-center my-4">
+  <div class="spinner-border text-success" role="status"><span class="visually-hidden">Loading...</span></div>
+</div>
+<div id="no-orgs" class="alert alert-info d-none">No active organizations configured.</div>
+
 <!-- Summary stats bar -->
-<div class="row mb-3 mt-2" id="summaryBar" style="display:none;">
-  <div class="col"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Total Nominated</div><div class="stat-value" id="statNominated">-</div></div></div>
-  <div class="col"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Responded</div><div class="stat-value text-success" id="statResponded">-</div></div></div>
-  <div class="col"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Pending</div><div class="stat-value text-warning" id="statPending">-</div></div></div>
-  <div class="col"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Response Rate</div><div class="stat-value" id="statRate">-</div></div></div>
-  <div class="col"><div class="stat-card card shadow-sm p-2"><div class="stat-label">NPS Score</div><div class="stat-value" id="statNPS">-</div></div></div>
-  <div class="col"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Orgs</div><div class="stat-value" id="statOrgs">-</div></div></div>
+<div class="row g-2 mb-3 d-none" id="summaryBar">
+  <div class="col"><div class="stat-card"><div class="stat-label">Combined NPS</div><div class="stat-value" id="statNps">—</div></div></div>
+  <div class="col"><div class="stat-card"><div class="stat-label">Promoters</div><div class="stat-value text-success" id="statP">—</div></div></div>
+  <div class="col"><div class="stat-card"><div class="stat-label">Passives</div><div class="stat-value text-warning" id="statPa">—</div></div></div>
+  <div class="col"><div class="stat-card"><div class="stat-label">Detractors</div><div class="stat-value text-danger" id="statD">—</div></div></div>
+  <div class="col"><div class="stat-card"><div class="stat-label">Response Rate</div><div class="stat-value" id="statRate">—</div></div></div>
+  <div class="col"><div class="stat-card"><div class="stat-label">Total Responses</div><div class="stat-value" id="statResp">—</div></div></div>
+  <div class="col"><div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value" id="statPend">—</div></div></div>
 </div>
 
 <!-- Filter bar -->
-<div class="card mb-3" id="filterCard" style="display:none;">
-  <div class="card-body py-2">
-    <div class="row g-2 align-items-center">
-      <div class="col-auto"><strong class="small">Filters</strong></div>
-      <div class="col-md-2">
-        <select class="form-select form-select-sm" id="filterOrg"><option value="">All Orgs</option></select>
-      </div>
-      <div class="col-md-2">
-        <select class="form-select form-select-sm" id="filterCycle"><option value="">Latest Cycle</option></select>
-      </div>
-      <div class="col-md-2">
-        <select class="form-select form-select-sm" id="filterLeader"><option value="">All Leaders</option></select>
-      </div>
-      <div class="col-md-2">
-        <select class="form-select form-select-sm" id="filterCategory">
-          <option value="">All Categories</option>
-          <option value="Promoter">Promoters</option>
-          <option value="Passive">Passives</option>
-          <option value="Detractor">Detractors</option>
-        </select>
-      </div>
-      <div class="col-auto">
-        <button class="btn btn-sm btn-outline-danger" id="clearFilters">Clear All</button>
-      </div>
+<div class="filter-bar rounded mb-3 d-none" id="filterBar">
+  <div class="row g-2 align-items-center">
+    <div class="col-auto"><strong class="small">Filters</strong></div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm" id="filterOrg"><option value="">All Orgs</option></select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm" id="filterCycle"><option value="">Latest Cycle</option></select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm" id="filterLeader"><option value="">All Leaders</option></select>
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-sm btn-outline-danger" id="clearFilters">Clear All</button>
     </div>
   </div>
 </div>
-
-<div id="loading" class="text-center my-4"><div class="spinner-border" role="status"></div></div>
-<div id="no-orgs" class="alert alert-info d-none">No active organizations configured.</div>
 
 <!-- Tabs -->
 <ul class="nav nav-tabs d-none" id="orgTabs" role="tablist"></ul>
@@ -66,91 +54,85 @@
   async function fetchJson(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
   function pct(c,t) { return t===0?'0.0':((c/t)*100).toFixed(1); }
   function npsColor(s) { return s>=50?'text-success':s>=0?'text-warning':'text-danger'; }
-  function npsBg(s) { return s>=50?'bg-success':s>=0?'bg-warning':'bg-danger'; }
   function cycleName(s) { return s.cycle_name||(s.start_date&&s.end_date?s.start_date+' to '+s.end_date:(s.cycle_id||'').substring(0,8)+'...'); }
-
-  function addTab(id, label, active) {
-    const li = document.createElement('li');
-    li.className = 'nav-item';
-    li.innerHTML = '<button class="nav-link '+(active?'active':'')+'" data-bs-toggle="tab" data-bs-target="#'+id+'" type="button">'+label+'</button>';
+  function addTab(id,label,active) {
+    const li=document.createElement('li'); li.className='nav-item';
+    li.innerHTML=`<button class="nav-link ${active?'active':''}" data-bs-toggle="tab" data-bs-target="#${id}" type="button">${label}</button>`;
     tabsEl.appendChild(li);
   }
 
-  function buildSummaryPane(data, active) {
-    let h = '<div class="tab-pane fade '+(active?'show active':'')+'" id="pane-summary">';
-    if (data.org_summaries && data.org_summaries.length) {
-      h += '<div class="card"><div class="card-body"><h5>Per-Organization Comparison</h5>';
-      h += '<table class="table table-sm table-hover"><thead class="table-light"><tr>';
-      h += '<th>Organization</th><th>Cycle</th><th class="text-center">NPS</th><th class="text-center">Nominated</th>';
-      h += '<th class="text-center">Responded</th><th class="text-center">Pending</th><th class="text-center">Rate</th>';
-      h += '<th class="text-center">P</th><th class="text-center">Pa</th><th class="text-center">D</th></tr></thead><tbody>';
-      for (const o of data.org_summaries) {
-        const p = o.total_nominated - o.total_responded;
-        h += '<tr><td><strong>'+o.org_name+'</strong></td><td>'+o.cycle_name+'</td>';
-        h += '<td class="text-center"><span class="badge '+npsBg(o.nps_score)+' text-white">'+o.nps_score+'</span></td>';
-        h += '<td class="text-center">'+o.total_nominated+'</td><td class="text-center">'+o.total_responded+'</td>';
-        h += '<td class="text-center">'+(p>0?'<span class="badge bg-warning text-dark">'+p+'</span>':'0')+'</td>';
-        h += '<td class="text-center">'+(o.response_rate*100).toFixed(0)+'%</td>';
-        h += '<td class="text-center">'+o.promoter_count+'</td><td class="text-center">'+o.passive_count+'</td>';
-        h += '<td class="text-center">'+o.detractor_count+'</td></tr>';
+  function buildSummaryPane(data,active) {
+    const ac=active?'show active':'';
+    let h=`<div class="tab-pane fade ${ac}" id="pane-summary" role="tabpanel">`;
+    if(data.org_summaries&&data.org_summaries.length>0){
+      h+=`<div class="card mb-3"><div class="card-body"><h5>Per-Organization Comparison</h5>
+        <table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>
+          <th>Organization</th><th>Cycle</th><th class="text-center">NPS</th>
+          <th class="text-center">Nominated</th><th class="text-center">Responded</th>
+          <th class="text-center">Pending</th><th class="text-center">Rate</th>
+          <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th><th class="text-center text-danger">D</th>
+        </tr></thead><tbody>`;
+      for(const o of data.org_summaries){
+        const p=o.total_nominated-o.total_responded;
+        h+=`<tr><td><strong>${o.org_name}</strong></td><td>${o.cycle_name}</td>
+          <td class="text-center"><strong class="${npsColor(o.nps_score)}">${o.nps_score}</strong></td>
+          <td class="text-center">${o.total_nominated}</td><td class="text-center">${o.total_responded}</td>
+          <td class="text-center">${p>0?'<span class="badge bg-warning text-dark">'+p+'</span>':'0'}</td>
+          <td class="text-center">${(o.response_rate*100).toFixed(0)}%</td>
+          <td class="text-center">${o.promoter_count}</td><td class="text-center">${o.passive_count}</td>
+          <td class="text-center">${o.detractor_count}</td></tr>`;
       }
-      h += '</tbody></table></div></div>';
+      h+='</tbody></table></div></div>';
     }
-    h += '</div>';
-    return h;
+    h+='</div>'; return h;
   }
 
   function buildLeaderTable(leaders) {
-    if (!leaders||!leaders.length) return '<p class="text-muted">No leader data.</p>';
-    let h = '<div class="card mb-3"><div class="card-body"><h6 class="text-uppercase text-muted small mb-2">Leader Breakdown</h6>';
-    h += '<table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>';
-    h += '<th>Leader</th><th class="text-center">Nom</th><th class="text-center">Resp</th>';
-    h += '<th class="text-center">Pend</th><th class="text-center">Rate</th>';
-    h += '<th class="text-center">P</th><th class="text-center">Pa</th><th class="text-center">D</th>';
-    h += '<th class="text-center">NPS</th></tr></thead><tbody>';
-    for (const l of leaders) {
-      h += '<tr><td><strong>'+l.leader+'</strong></td>';
-      h += '<td class="text-center">'+l.nominated+'</td><td class="text-center">'+l.responded+'</td>';
-      h += '<td class="text-center">'+(l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'0')+'</td>';
-      h += '<td class="text-center">'+(l.response_rate*100).toFixed(0)+'%</td>';
-      h += '<td class="text-center">'+l.promoter_count+'</td><td class="text-center">'+l.passive_count+'</td>';
-      h += '<td class="text-center">'+l.detractor_count+'</td>';
-      h += '<td class="text-center"><span class="badge '+npsBg(l.nps_score)+' text-white">'+l.nps_score.toFixed(1)+'</span></td></tr>';
+    if(!leaders||!leaders.length) return '';
+    let h=`<div class="card mb-3"><div class="card-body"><h6 class="mb-2">Leader-Level Breakdown</h6>
+      <table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>
+        <th>Leader</th><th class="text-center">Nom</th><th class="text-center">Resp</th>
+        <th class="text-center">Pend</th><th class="text-center">Rate</th>
+        <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
+        <th class="text-center text-danger">D</th><th class="text-center">NPS</th>
+      </tr></thead><tbody>`;
+    for(const l of leaders){
+      h+=`<tr><td><strong>${l.leader}</strong></td>
+        <td class="text-center">${l.nominated}</td><td class="text-center">${l.responded}</td>
+        <td class="text-center">${l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'0'}</td>
+        <td class="text-center">${(l.response_rate*100).toFixed(0)}%</td>
+        <td class="text-center">${l.promoter_count}</td><td class="text-center">${l.passive_count}</td>
+        <td class="text-center">${l.detractor_count}</td>
+        <td class="text-center"><strong class="${npsColor(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td></tr>`;
     }
-    h += '</tbody></table></div></div>';
-    return h;
+    h+='</tbody></table></div></div>'; return h;
   }
 
-  function buildOrgPane(org, summaries, leaders, active) {
-    const latest = summaries.length?summaries[summaries.length-1]:null;
-    let h = '<div class="tab-pane fade '+(active?'show active':'')+'" id="pane-'+org.org_id+'">';
-    if (!latest) { h += '<p class="text-muted">No survey cycles found.</p></div>'; return h; }
-    const t = latest.total_responded, pend = latest.total_nominated - t;
+  function buildOrgPane(org,summaries,leaders,active) {
+    const ac=active?'show active':'';
+    const latest=summaries.length>0?summaries[summaries.length-1]:null;
+    let h=`<div class="tab-pane fade ${ac}" id="pane-${org.org_id}" role="tabpanel">`;
+    if(!latest){h+='<p class="text-muted">No survey cycles found.</p></div>';return h;}
+    const t=latest.total_responded, pend=latest.total_nominated-t;
 
-    h += '<div class="row mb-3">';
-    h += '<div class="col-md-2"><div class="stat-card card shadow-sm p-2"><div class="stat-label">NPS Score</div><div class="stat-value '+npsColor(latest.nps_score)+'">'+latest.nps_score.toFixed(1)+'</div></div></div>';
-    h += '<div class="col-md-2"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Response Rate</div><div class="stat-value">'+(latest.response_rate*100).toFixed(0)+'%</div><small class="text-muted">'+t+' / '+latest.total_nominated+'</small></div></div>';
-    h += '<div class="col-md-2"><div class="stat-card card shadow-sm p-2"><div class="stat-label">Pending</div><div class="stat-value '+(pend>0?'text-warning':'text-success')+'">'+pend+'</div></div></div>';
-    h += '<div class="col-md-6"><div class="card shadow-sm"><div class="card-body py-2">';
-    h += '<div class="row text-center"><div class="col"><small class="text-muted">Promoters</small><div class="h5 text-success">'+latest.promoter_count+' <small>('+pct(latest.promoter_count,t)+'%)</small></div></div>';
-    h += '<div class="col"><small class="text-muted">Passives</small><div class="h5 text-warning">'+latest.passive_count+' <small>('+pct(latest.passive_count,t)+'%)</small></div></div>';
-    h += '<div class="col"><small class="text-muted">Detractors</small><div class="h5 text-danger">'+latest.detractor_count+' <small>('+pct(latest.detractor_count,t)+'%)</small></div></div>';
-    h += '</div></div></div></div></div>';
-
-    h += buildLeaderTable(leaders);
-
-    if (summaries.length > 0) {
-      h += '<div class="card mb-3"><div class="card-body"><h6 class="text-uppercase text-muted small mb-2">Trend by Cycle</h6>';
-      h += '<table class="table table-sm table-striped"><thead><tr><th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>';
-      for (const s of summaries) {
-        h += '<tr><td>'+cycleName(s)+'</td><td><span class="badge '+npsBg(s.nps_score)+' text-white">'+s.nps_score.toFixed(1)+'</span></td>';
-        h += '<td>'+s.promoter_count+'</td><td>'+s.passive_count+'</td><td>'+s.detractor_count+'</td>';
-        h += '<td>'+s.total_responded+'</td><td>'+s.total_nominated+'</td><td>'+(s.response_rate*100).toFixed(1)+'%</td></tr>';
-      }
-      h += '</tbody></table></div></div>';
+    h+=`<div class="row g-2 mb-3">
+      <div class="col-md-2"><div class="stat-card"><div class="stat-label">NPS Score</div><div class="stat-value ${npsColor(latest.nps_score)}">${latest.nps_score.toFixed(1)}</div></div></div>
+      <div class="col-md-2"><div class="stat-card"><div class="stat-label">Response Rate</div><div class="stat-value">${(latest.response_rate*100).toFixed(0)}%</div><small class="text-muted">${t}/${latest.total_nominated}</small></div></div>
+      <div class="col-md-2"><div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value ${pend>0?'text-warning':'text-success'}">${pend}</div></div></div>
+      <div class="col-md-2"><div class="stat-card"><div class="stat-label">Promoters</div><div class="stat-value text-success">${latest.promoter_count}</div></div></div>
+      <div class="col-md-2"><div class="stat-card"><div class="stat-label">Passives</div><div class="stat-value text-warning">${latest.passive_count}</div></div></div>
+      <div class="col-md-2"><div class="stat-card"><div class="stat-label">Detractors</div><div class="stat-value text-danger">${latest.detractor_count}</div></div></div>
+    </div>`;
+    h+=buildLeaderTable(leaders);
+    if(summaries.length>1){
+      h+=`<div class="card mb-3"><div class="card-body"><h6>Trend</h6><table class="table table-sm table-striped mb-0"><thead><tr>
+        <th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>`;
+      for(const s of summaries){h+=`<tr><td>${cycleName(s)}</td><td><strong class="${npsColor(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
+        <td>${s.promoter_count}</td><td>${s.passive_count}</td><td>${s.detractor_count}</td>
+        <td>${s.total_responded}</td><td>${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(1)}%</td></tr>`;}
+      h+='</tbody></table></div></div>';
     }
-    h += '</div>';
-    return h;
+    h+='</div>'; return h;
   }
 
   async function loadDashboard() {
@@ -159,9 +141,11 @@
       const activeOrgs = orgs.filter(o => o.is_active);
       loadingEl.classList.add('d-none');
       if (!activeOrgs.length) { noOrgsEl.classList.remove('d-none'); return; }
+
+      // Show UI elements
       tabsEl.classList.remove('d-none');
-      document.getElementById('summaryBar').style.display = '';
-      document.getElementById('filterCard').style.display = '';
+      document.getElementById('summaryBar').classList.remove('d-none');
+      document.getElementById('filterBar').classList.remove('d-none');
 
       // Populate org filter
       const filterOrg = document.getElementById('filterOrg');
@@ -171,55 +155,65 @@
         filterOrg.appendChild(opt);
       }
 
+      // Load summary
+      const summaryData = await fetchJson('/nps/dashboard/summary');
+      document.getElementById('statNps').className = 'stat-value ' + npsColor(summaryData.overall_nps);
+      document.getElementById('statNps').textContent = summaryData.overall_nps;
+      document.getElementById('statP').textContent = summaryData.total_promoters;
+      document.getElementById('statPa').textContent = summaryData.total_passives;
+      document.getElementById('statD').textContent = summaryData.total_detractors;
+      document.getElementById('statRate').textContent = (summaryData.overall_response_rate * 100).toFixed(0) + '%';
+      document.getElementById('statResp').textContent = summaryData.total_responded;
+      document.getElementById('statPend').textContent = summaryData.total_pending;
+
       // Summary tab
       addTab('pane-summary', 'All Orgs', true);
-      const summary = await fetchJson('/nps/dashboard/summary');
-      contentEl.insertAdjacentHTML('beforeend', buildSummaryPane(summary, true));
-
-      // Update summary bar
-      document.getElementById('statNominated').textContent = summary.total_nominated;
-      document.getElementById('statResponded').textContent = summary.total_responded;
-      document.getElementById('statPending').textContent = summary.total_pending;
-      document.getElementById('statRate').textContent = (summary.overall_response_rate*100).toFixed(0)+'%';
-      document.getElementById('statNPS').textContent = summary.overall_nps;
-      document.getElementById('statNPS').className = 'stat-value '+npsColor(summary.overall_nps);
-      document.getElementById('statOrgs').textContent = summary.org_count;
+      contentEl.insertAdjacentHTML('beforeend', buildSummaryPane(summaryData, true));
 
       // Org tabs
       for (const org of activeOrgs) {
-        addTab('pane-'+org.org_id, org.org_name, false);
+        addTab('pane-' + org.org_id, org.org_name, false);
         let summaries = [];
-        try { summaries = await fetchJson('/nps/dashboard?org_id='+encodeURIComponent(org.org_id));
+        try { summaries = await fetchJson('/nps/dashboard?org_id=' + encodeURIComponent(org.org_id));
           if (!Array.isArray(summaries)) summaries = [summaries];
         } catch(e) {}
         let leaders = [];
-        if (summaries.length) {
-          try { leaders = await fetchJson('/nps/dashboard/leaders?org_id='+encodeURIComponent(org.org_id)+'&cycle_id='+encodeURIComponent(summaries[summaries.length-1].cycle_id));
+        if (summaries.length > 0) {
+          try { leaders = await fetchJson('/nps/dashboard/leaders?org_id=' + encodeURIComponent(org.org_id) + '&cycle_id=' + encodeURIComponent(summaries[summaries.length-1].cycle_id));
           } catch(e) {}
           // Populate leader filter
-          const fl = document.getElementById('filterLeader');
+          const filterLeader = document.getElementById('filterLeader');
           for (const l of leaders) {
-            if (![...fl.options].some(o => o.value === l.leader)) {
+            if (!filterLeader.querySelector('option[value="'+l.leader+'"]')) {
               const opt = document.createElement('option');
               opt.value = l.leader; opt.textContent = l.leader;
-              fl.appendChild(opt);
+              filterLeader.appendChild(opt);
             }
           }
         }
         contentEl.insertAdjacentHTML('beforeend', buildOrgPane(org, summaries, leaders, false));
       }
 
-      // Clear filters button
+      // Filter: org selection switches tab
+      filterOrg.addEventListener('change', function() {
+        if (!this.value) {
+          document.querySelector('[data-bs-target="#pane-summary"]').click();
+        } else {
+          const btn = document.querySelector('[data-bs-target="#pane-' + this.value + '"]');
+          if (btn) btn.click();
+        }
+      });
+
       document.getElementById('clearFilters').addEventListener('click', function() {
-        document.getElementById('filterOrg').value = '';
+        filterOrg.value = '';
         document.getElementById('filterCycle').value = '';
         document.getElementById('filterLeader').value = '';
-        document.getElementById('filterCategory').value = '';
+        document.querySelector('[data-bs-target="#pane-summary"]').click();
       });
 
     } catch (err) {
       loadingEl.classList.add('d-none');
-      noOrgsEl.textContent = 'Error: '+err.message;
+      noOrgsEl.textContent = 'Error: ' + err.message;
       noOrgsEl.classList.remove('d-none');
     }
   }
