@@ -1,32 +1,37 @@
 {% extends "base.html" %}
 {% block title %}NPS Dashboard{% endblock %}
-
 {% block content %}
-<div id="loading" class="text-center my-4">
-  <div class="spinner-border text-success" role="status"><span class="visually-hidden">Loading...</span></div>
-</div>
+<div id="loading" class="text-center my-4"><div class="spinner-border"></div></div>
 <div id="no-orgs" class="alert alert-info d-none">No active organizations configured.</div>
 
-<!-- Filter Bar -->
-<div class="filter-bar rounded mb-3 d-none" id="filterBar">
-  <div class="row g-2 align-items-end">
-    <div class="col-auto"><label>Organization</label><select class="form-select form-select-sm" id="filterOrg"><option value="all">All Orgs</option></select></div>
-    <div class="col-auto"><label>Cycle</label><select class="form-select form-select-sm" id="filterCycle"><option value="latest">Latest</option></select></div>
-    <div class="col-auto"><label>Leader</label><select class="form-select form-select-sm" id="filterLeader"><option value="all">All Leaders</option></select></div>
-    <div class="col-auto"><label>Category</label><select class="form-select form-select-sm" id="filterCategory"><option value="all">All</option><option value="Promoter">Promoters</option><option value="Passive">Passives</option><option value="Detractor">Detractors</option></select></div>
-    <div class="col-auto"><button class="btn btn-sm btn-outline-light" onclick="clearFilters()">Clear All</button></div>
+<!-- Filter bar -->
+<div class="filter-bar rounded p-2 mb-3 d-none" id="filterBar">
+  <div class="row g-2 align-items-center">
+    <div class="col-auto"><strong class="text-muted">Filters</strong></div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm" id="filterOrg"><option value="">All Orgs</option></select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm" id="filterCycle"><option value="">Latest Cycle</option></select>
+    </div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm" id="filterLeader"><option value="">All Leaders</option></select>
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-sm btn-outline-danger" id="clearFilters">Clear All</button>
+    </div>
   </div>
 </div>
 
-<!-- Summary Stats Bar -->
-<div class="row mb-3 d-none" id="statsBar">
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">NPS Score</div><div class="stat-value" id="statNps">—</div></div></div>
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">Promoters</div><div class="stat-value text-success" id="statP">—</div></div></div>
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">Passives</div><div class="stat-value text-warning" id="statPa">—</div></div></div>
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">Detractors</div><div class="stat-value text-danger" id="statD">—</div></div></div>
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">Response Rate</div><div class="stat-value" id="statRate">—</div></div></div>
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">Pending</div><div class="stat-value text-warning" id="statPend">—</div></div></div>
-  <div class="col"><div class="stat-card card text-center p-2"><div class="stat-label">Total Responses</div><div class="stat-value" id="statTotal">—</div></div></div>
+<!-- Summary stats bar -->
+<div class="row mb-3 d-none" id="summaryBar">
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">NPS Score</small><div id="statNps" class="fw-bold fs-3">-</div></div></div>
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Promoters</small><div id="statP" class="fw-bold fs-3 text-success">-</div></div></div>
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Passives</small><div id="statPa" class="fw-bold fs-3 text-warning">-</div></div></div>
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Detractors</small><div id="statD" class="fw-bold fs-3 text-danger">-</div></div></div>
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Response Rate</small><div id="statRate" class="fw-bold fs-3">-</div></div></div>
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Pending</small><div id="statPend" class="fw-bold fs-3 text-warning">-</div></div></div>
+  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Total Responses</small><div id="statTotal" class="fw-bold fs-3">-</div></div></div>
 </div>
 
 <!-- Tabs -->
@@ -36,176 +41,151 @@
 
 {% block scripts %}
 <script>
-(function () {
-  const loadingEl = document.getElementById('loading');
-  const noOrgsEl = document.getElementById('no-orgs');
-  const tabsEl = document.getElementById('orgTabs');
-  const contentEl = document.getElementById('orgTabContent');
-  let allData = {};
+(function(){
+  const loading=document.getElementById('loading'), noOrgs=document.getElementById('no-orgs');
+  const tabs=document.getElementById('orgTabs'), content=document.getElementById('orgTabContent');
+  const filterBar=document.getElementById('filterBar'), summaryBar=document.getElementById('summaryBar');
+  let allData={orgs:[],summaryData:null,orgData:{}};
 
-  async function fetchJson(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
-  function pct(c,t) { return t===0?'0.0':((c/t)*100).toFixed(1); }
-  function npsColor(s) { return s>=50?'text-success':s>=0?'text-warning':'text-danger'; }
-  function cycleName(s) { return s.cycle_name||(s.start_date&&s.end_date?s.start_date+' to '+s.end_date:(s.cycle_id||'').substring(0,8)+'...'); }
-  function addTab(id,label,active) {
-    const li=document.createElement('li'); li.className='nav-item';
+  async function F(u){const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();}
+  function pct(c,t){return t?((c/t)*100).toFixed(1):'0.0';}
+  function nc(s){return s>=50?'text-success':s>=0?'text-warning':'text-danger';}
+  function cn(s){return s.cycle_name||(s.start_date?s.start_date+' to '+s.end_date:(s.cycle_id||'').substring(0,8));}
+
+  function addTab(id,label,active){
+    const li=document.createElement('li');li.className='nav-item';
     li.innerHTML=`<button class="nav-link ${active?'active':''}" data-bs-toggle="tab" data-bs-target="#${id}" type="button">${label}</button>`;
-    tabsEl.appendChild(li);
+    tabs.appendChild(li);
   }
 
-  function updateStats(data) {
-    document.getElementById('statsBar').classList.remove('d-none');
-    const nps = data.overall_nps || data.nps_score || 0;
-    document.getElementById('statNps').className = 'stat-value ' + npsColor(nps);
-    document.getElementById('statNps').textContent = typeof nps==='number'?nps.toFixed(1):nps;
-    document.getElementById('statP').textContent = data.total_promoters||data.promoter_count||0;
-    document.getElementById('statPa').textContent = data.total_passives||data.passive_count||0;
-    document.getElementById('statD').textContent = data.total_detractors||data.detractor_count||0;
-    const rate = data.overall_response_rate||data.response_rate||0;
-    document.getElementById('statRate').textContent = (rate*100).toFixed(0)+'%';
-    document.getElementById('statPend').textContent = data.total_pending||(data.total_nominated-data.total_responded)||0;
-    document.getElementById('statTotal').textContent = data.total_responded||0;
+  function updateSummaryBar(d){
+    document.getElementById('statNps').className='fw-bold fs-3 '+nc(d.overall_nps||d.nps_score||0);
+    document.getElementById('statNps').textContent=(d.overall_nps||d.nps_score||0).toFixed?.(1)||d.overall_nps||'0';
+    document.getElementById('statP').textContent=d.total_promoters||d.promoter_count||0;
+    document.getElementById('statPa').textContent=d.total_passives||d.passive_count||0;
+    document.getElementById('statD').textContent=d.total_detractors||d.detractor_count||0;
+    const nom=d.total_nominated||0,resp=d.total_responded||0;
+    document.getElementById('statRate').textContent=nom?(resp/nom*100).toFixed(0)+'%':'0%';
+    document.getElementById('statPend').textContent=(d.total_pending!=null)?d.total_pending:(nom-resp);
+    document.getElementById('statTotal').textContent=resp;
   }
 
-  window.clearFilters = function() {
-    document.getElementById('filterOrg').value='all';
-    document.getElementById('filterCycle').value='latest';
-    document.getElementById('filterLeader').value='all';
-    document.getElementById('filterCategory').value='all';
-  };
-
-  function buildLeaderTable(leaders) {
-    if (!leaders||!leaders.length) return '';
+  function buildLeaderTable(leaders){
+    if(!leaders||!leaders.length)return'<p class="text-muted">No leader data.</p>';
     let h=`<div class="card mb-3"><div class="card-body p-2"><h6 class="mb-2">Leader Breakdown</h6>
       <table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>
-        <th>Leader</th><th class="text-center">Nom</th><th class="text-center">Resp</th>
-        <th class="text-center">Pend</th><th class="text-center">Rate</th>
-        <th class="text-center">P</th><th class="text-center">Pa</th><th class="text-center">D</th>
-        <th class="text-center">NPS</th></tr></thead><tbody>`;
-    for (const l of leaders) {
-      h+=`<tr><td><strong>${l.leader}</strong></td>
-        <td class="text-center">${l.nominated}</td><td class="text-center">${l.responded}</td>
+      <th>Leader</th><th class="text-center">Nom</th><th class="text-center">Resp</th><th class="text-center">Pend</th>
+      <th class="text-center">Rate</th><th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
+      <th class="text-center text-danger">D</th><th class="text-center">NPS</th></tr></thead><tbody>`;
+    for(const l of leaders){
+      h+=`<tr><td><strong>${l.leader}</strong></td><td class="text-center">${l.nominated}</td>
+        <td class="text-center">${l.responded}</td>
         <td class="text-center">${l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'0'}</td>
         <td class="text-center">${(l.response_rate*100).toFixed(0)}%</td>
-        <td class="text-center text-success">${l.promoter_count}</td>
-        <td class="text-center text-warning">${l.passive_count}</td>
-        <td class="text-center text-danger">${l.detractor_count}</td>
-        <td class="text-center"><strong class="${npsColor(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td></tr>`;
+        <td class="text-center">${l.promoter_count}</td><td class="text-center">${l.passive_count}</td>
+        <td class="text-center">${l.detractor_count}</td>
+        <td class="text-center"><strong class="${nc(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td></tr>`;
     }
-    h+='</tbody></table></div></div>';
-    return h;
+    return h+'</tbody></table></div></div>';
   }
 
-  function buildSummaryPane(data, active) {
-    let h=`<div class="tab-pane fade ${active?'show active':''}" id="pane-summary" role="tabpanel">`;
-    if (data.org_summaries&&data.org_summaries.length) {
-      h+=`<div class="card mb-3"><div class="card-body p-2"><h6 class="mb-2">Organization Comparison</h6>
+  function buildSummaryPane(d,active){
+    let h=`<div class="tab-pane fade ${active?'show active':''}" id="pane-summary">`;
+    if(d.org_summaries&&d.org_summaries.length){
+      h+=`<div class="card mb-3"><div class="card-body p-2"><h6>Per-Organization Comparison</h6>
         <table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>
-          <th>Organization</th><th>Cycle</th><th class="text-center">NPS</th>
-          <th class="text-center">Nom</th><th class="text-center">Resp</th><th class="text-center">Pend</th>
-          <th class="text-center">Rate</th><th class="text-center">P</th><th class="text-center">Pa</th><th class="text-center">D</th>
-        </tr></thead><tbody>`;
-      for (const o of data.org_summaries) {
+        <th>Org</th><th>Cycle</th><th class="text-center">NPS</th><th class="text-center">Nom</th>
+        <th class="text-center">Resp</th><th class="text-center">Pend</th><th class="text-center">Rate</th>
+        <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
+        <th class="text-center text-danger">D</th></tr></thead><tbody>`;
+      for(const o of d.org_summaries){
         const p=o.total_nominated-o.total_responded;
         h+=`<tr><td><strong>${o.org_name}</strong></td><td>${o.cycle_name}</td>
-          <td class="text-center"><strong class="${npsColor(o.nps_score)}">${o.nps_score}</strong></td>
+          <td class="text-center"><strong class="${nc(o.nps_score)}">${o.nps_score}</strong></td>
           <td class="text-center">${o.total_nominated}</td><td class="text-center">${o.total_responded}</td>
           <td class="text-center">${p>0?'<span class="badge bg-warning text-dark">'+p+'</span>':'0'}</td>
           <td class="text-center">${(o.response_rate*100).toFixed(0)}%</td>
-          <td class="text-center text-success">${o.promoter_count}</td>
-          <td class="text-center text-warning">${o.passive_count}</td>
-          <td class="text-center text-danger">${o.detractor_count}</td></tr>`;
+          <td class="text-center">${o.promoter_count}</td><td class="text-center">${o.passive_count}</td>
+          <td class="text-center">${o.detractor_count}</td></tr>`;
       }
       h+='</tbody></table></div></div>';
     }
-    h+='</div>';
-    return h;
+    return h+'</div>';
   }
 
-  function buildOrgPane(org, summaries, leaders, active) {
+  function buildOrgPane(org,summaries,leaders,active){
     const latest=summaries.length?summaries[summaries.length-1]:null;
-    let h=`<div class="tab-pane fade ${active?'show active':''}" id="pane-${org.org_id}" role="tabpanel">`;
-    if (!latest) { h+='<p class="text-muted">No survey cycles found.</p></div>'; return h; }
-    h+=`<p class="text-muted mb-2">Cycle: ${cycleName(latest)} | Nominated: ${latest.total_nominated} | Responded: ${latest.total_responded}</p>`;
+    let h=`<div class="tab-pane fade ${active?'show active':''}" id="pane-${org.org_id}">`;
+    if(!latest){h+='<p class="text-muted">No survey cycles found.</p></div>';return h;}
+    h+=`<h6 class="text-muted mb-3">Cycle: ${cn(latest)}</h6>`;
     h+=buildLeaderTable(leaders);
-    if (summaries.length>1) {
-      h+=`<div class="card mb-3"><div class="card-body p-2"><h6 class="mb-2">Trend</h6>
-        <table class="table table-sm table-striped mb-0"><thead><tr><th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Rate</th></tr></thead><tbody>`;
-      for (const s of summaries) {
-        h+=`<tr><td>${cycleName(s)}</td><td><strong class="${npsColor(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
+    if(summaries.length>1){
+      h+=`<div class="card mb-3"><div class="card-body p-2"><h6>Trend</h6>
+        <table class="table table-sm table-striped mb-0"><thead><tr><th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>`;
+      for(const s of summaries){
+        h+=`<tr><td>${cn(s)}</td><td><strong class="${nc(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
           <td>${s.promoter_count}</td><td>${s.passive_count}</td><td>${s.detractor_count}</td>
-          <td>${s.total_responded}/${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(0)}%</td></tr>`;
+          <td>${s.total_responded}</td><td>${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(1)}%</td></tr>`;
       }
       h+='</tbody></table></div></div>';
     }
-    h+='</div>';
-    return h;
+    return h+'</div>';
   }
 
-  async function loadDashboard() {
-    try {
-      const orgs = await fetchJson('/nps/orgs');
-      const activeOrgs = orgs.filter(o=>o.is_active);
-      loadingEl.classList.add('d-none');
-      if (!activeOrgs.length) { noOrgsEl.classList.remove('d-none'); return; }
-
-      document.getElementById('filterBar').classList.remove('d-none');
-      tabsEl.classList.remove('d-none');
+  async function load(){
+    try{
+      const orgs=await F('/nps/orgs');
+      allData.orgs=orgs.filter(o=>o.is_active);
+      loading.classList.add('d-none');
+      if(!allData.orgs.length){noOrgs.classList.remove('d-none');return;}
+      filterBar.classList.remove('d-none');
+      summaryBar.classList.remove('d-none');
+      tabs.classList.remove('d-none');
 
       // Populate org filter
-      const filterOrg = document.getElementById('filterOrg');
-      for (const o of activeOrgs) {
-        const opt = document.createElement('option');
-        opt.value = o.org_id; opt.textContent = o.org_name;
-        filterOrg.appendChild(opt);
+      const fOrg=document.getElementById('filterOrg');
+      for(const o of allData.orgs){
+        const opt=document.createElement('option');opt.value=o.org_id;opt.textContent=o.org_name;fOrg.appendChild(opt);
       }
 
-      // Summary tab
+      // Load summary
+      allData.summaryData=await F('/nps/dashboard/summary');
+      updateSummaryBar(allData.summaryData);
       addTab('pane-summary','All Orgs',true);
-      const summary = await fetchJson('/nps/dashboard/summary');
-      updateStats(summary);
-      contentEl.insertAdjacentHTML('beforeend', buildSummaryPane(summary, true));
+      content.insertAdjacentHTML('beforeend',buildSummaryPane(allData.summaryData,true));
 
-      // Org tabs
-      for (const org of activeOrgs) {
-        addTab('pane-'+org.org_id, org.org_name, false);
-        let summaries=[];
-        try { summaries=await fetchJson('/nps/dashboard?org_id='+encodeURIComponent(org.org_id));
-          if (!Array.isArray(summaries)) summaries=[summaries]; } catch(e){}
+      // Load each org
+      for(const org of allData.orgs){
+        addTab('pane-'+org.org_id,org.org_name,false);
+        let sums=[];try{sums=await F('/nps/dashboard?org_id='+encodeURIComponent(org.org_id));if(!Array.isArray(sums))sums=[sums];}catch(e){}
         let leaders=[];
-        if (summaries.length) {
-          try { leaders=await fetchJson('/nps/dashboard/leaders?org_id='+encodeURIComponent(org.org_id)+'&cycle_id='+encodeURIComponent(summaries[summaries.length-1].cycle_id)); } catch(e){}
-          // Populate leader filter
-          const fl=document.getElementById('filterLeader');
-          for (const l of leaders) {
-            if (!fl.querySelector(`option[value="${l.leader}"]`)) {
-              const o=document.createElement('option'); o.value=l.leader; o.textContent=l.leader; fl.appendChild(o);
-            }
+        if(sums.length){try{leaders=await F('/nps/dashboard/leaders?org_id='+encodeURIComponent(org.org_id)+'&cycle_id='+encodeURIComponent(sums[sums.length-1].cycle_id));}catch(e){}}
+        allData.orgData[org.org_id]={summaries:sums,leaders:leaders};
+
+        // Populate leader filter
+        const fL=document.getElementById('filterLeader');
+        for(const l of leaders){
+          if(!Array.from(fL.options).some(o=>o.value===l.leader)){
+            const opt=document.createElement('option');opt.value=l.leader;opt.textContent=l.leader;fL.appendChild(opt);
           }
         }
-        contentEl.insertAdjacentHTML('beforeend', buildOrgPane(org, summaries, leaders, false));
+        content.insertAdjacentHTML('beforeend',buildOrgPane(org,sums,leaders,false));
       }
 
-      // Tab change updates stats
-      tabsEl.addEventListener('click', async function(e) {
-        const btn=e.target.closest('button');
-        if (!btn) return;
-        const target=btn.getAttribute('data-bs-target');
-        if (target==='#pane-summary') { updateStats(summary); return; }
-        const orgId=target.replace('#pane-','');
-        try {
-          const s=await fetchJson('/nps/dashboard?org_id='+encodeURIComponent(orgId));
-          const latest=Array.isArray(s)?s[s.length-1]:s;
-          if (latest) updateStats(latest);
-        } catch(e){}
+      // Filter: org select switches tab
+      fOrg.addEventListener('change',function(){
+        const v=this.value;
+        if(!v){document.querySelector('[data-bs-target="#pane-summary"]').click();updateSummaryBar(allData.summaryData);}
+        else{const btn=document.querySelector('[data-bs-target="#pane-'+v+'"]');if(btn)btn.click();
+          const d=allData.orgData[v];if(d&&d.summaries.length){const s=d.summaries[d.summaries.length-1];updateSummaryBar(s);}}
       });
-    } catch(err) {
-      loadingEl.classList.add('d-none');
-      noOrgsEl.textContent='Error: '+err.message;
-      noOrgsEl.classList.remove('d-none');
-    }
+      document.getElementById('clearFilters').addEventListener('click',function(){
+        document.getElementById('filterOrg').value='';document.getElementById('filterCycle').value='';document.getElementById('filterLeader').value='';
+        document.querySelector('[data-bs-target="#pane-summary"]').click();updateSummaryBar(allData.summaryData);
+      });
+    }catch(e){loading.classList.add('d-none');noOrgs.textContent='Error: '+e.message;noOrgs.classList.remove('d-none');}
   }
-  loadDashboard();
+  load();
 })();
 </script>
 {% endblock %}
