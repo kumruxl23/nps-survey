@@ -1,190 +1,213 @@
 {% extends "base.html" %}
 {% block title %}NPS Dashboard{% endblock %}
 {% block content %}
-<div id="loading" class="text-center my-4"><div class="spinner-border"></div></div>
-<div id="no-orgs" class="alert alert-info d-none">No active organizations configured.</div>
+<div id="asanaBanner" class="alert alert-warning d-none d-flex justify-content-between align-items-center" role="alert">
+  <div><strong>ASANA not connected.</strong> Survey responses can't sync until an admin authorizes ASANA.</div>
+  <a href="/nps/auth/asana" class="btn btn-sm btn-warning">Connect ASANA</a>
+</div>
+<div id="loading" class="text-center my-5"><div class="spinner-border text-success"></div></div>
+<div id="main" class="d-none">
 
-<!-- Filter bar -->
-<div class="filter-bar rounded p-2 mb-3 d-none" id="filterBar">
+<!-- Stat summary row -->
+<div class="stat-row" id="statRow"></div>
+
+<!-- Org tabs (clickable) -->
+<ul class="nav nav-tabs org-tabs mb-3" id="orgTabs" role="tablist"></ul>
+
+<!-- Filter bar (inside tab content) -->
+<div class="filter-bar mb-3" id="filterBar">
   <div class="row g-2 align-items-center">
-    <div class="col-auto"><strong class="text-muted">Filters</strong></div>
+    <div class="col-auto"><strong>Filters</strong></div>
     <div class="col-md-2">
-      <select class="form-select form-select-sm" id="filterOrg"><option value="">All Orgs</option></select>
+      <select class="form-select form-select-sm" id="fCycle"><option value="">All Cycles</option></select>
     </div>
     <div class="col-md-2">
-      <select class="form-select form-select-sm" id="filterCycle"><option value="">Latest Cycle</option></select>
+      <select class="form-select form-select-sm" id="fLeader"><option value="">All Leaders</option></select>
     </div>
     <div class="col-md-2">
-      <select class="form-select form-select-sm" id="filterLeader"><option value="">All Leaders</option></select>
+      <select class="form-select form-select-sm" id="fCategory">
+        <option value="">All Categories</option>
+        <option value="Promoter">Promoters</option>
+        <option value="Passive">Passives</option>
+        <option value="Detractor">Detractors</option>
+      </select>
     </div>
     <div class="col-auto">
-      <button class="btn btn-sm btn-outline-danger" id="clearFilters">Clear All</button>
+      <button class="btn btn-sm btn-outline-danger" id="btnClear">Clear All</button>
     </div>
   </div>
 </div>
 
-<!-- Summary stats bar -->
-<div class="row mb-3 d-none" id="summaryBar">
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">NPS Score</small><div id="statNps" class="fw-bold fs-3">-</div></div></div>
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Promoters</small><div id="statP" class="fw-bold fs-3 text-success">-</div></div></div>
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Passives</small><div id="statPa" class="fw-bold fs-3 text-warning">-</div></div></div>
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Detractors</small><div id="statD" class="fw-bold fs-3 text-danger">-</div></div></div>
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Response Rate</small><div id="statRate" class="fw-bold fs-3">-</div></div></div>
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Pending</small><div id="statPend" class="fw-bold fs-3 text-warning">-</div></div></div>
-  <div class="col"><div class="card stat-card shadow-sm text-center p-2"><small class="text-muted">Total Responses</small><div id="statTotal" class="fw-bold fs-3">-</div></div></div>
+<!-- Tab content -->
+<div class="tab-content" id="tabContent"></div>
 </div>
-
-<!-- Tabs -->
-<ul class="nav nav-tabs d-none" id="orgTabs" role="tablist"></ul>
-<div class="tab-content mt-3" id="orgTabContent"></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 (function(){
-  const loading=document.getElementById('loading'), noOrgs=document.getElementById('no-orgs');
-  const tabs=document.getElementById('orgTabs'), content=document.getElementById('orgTabContent');
-  const filterBar=document.getElementById('filterBar'), summaryBar=document.getElementById('summaryBar');
-  let allData={orgs:[],summaryData:null,orgData:{}};
+  const loading=document.getElementById('loading'),main=document.getElementById('main');
+  const tabsEl=document.getElementById('orgTabs'),contentEl=document.getElementById('tabContent');
+  const statRow=document.getElementById('statRow');
+  let DATA={summary:null,orgs:[],orgMap:{}};
 
   async function F(u){const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();}
   function pct(c,t){return t?((c/t)*100).toFixed(1):'0.0';}
   function nc(s){return s>=50?'text-success':s>=0?'text-warning':'text-danger';}
-  function cn(s){return s.cycle_name||(s.start_date?s.start_date+' to '+s.end_date:(s.cycle_id||'').substring(0,8));}
+  function cn(s){return s.cycle_name||(s.start_date?s.start_date+' - '+s.end_date:(s.cycle_id||'').substring(0,8));}
 
-  function addTab(id,label,active){
-    const li=document.createElement('li');li.className='nav-item';
-    li.innerHTML=`<button class="nav-link ${active?'active':''}" data-bs-toggle="tab" data-bs-target="#${id}" type="button">${label}</button>`;
-    tabs.appendChild(li);
-  }
-
-  function updateSummaryBar(d){
-    document.getElementById('statNps').className='fw-bold fs-3 '+nc(d.overall_nps||d.nps_score||0);
-    document.getElementById('statNps').textContent=(d.overall_nps||d.nps_score||0).toFixed?.(1)||d.overall_nps||'0';
-    document.getElementById('statP').textContent=d.total_promoters||d.promoter_count||0;
-    document.getElementById('statPa').textContent=d.total_passives||d.passive_count||0;
-    document.getElementById('statD').textContent=d.total_detractors||d.detractor_count||0;
-    const nom=d.total_nominated||0,resp=d.total_responded||0;
-    document.getElementById('statRate').textContent=nom?(resp/nom*100).toFixed(0)+'%':'0%';
-    document.getElementById('statPend').textContent=(d.total_pending!=null)?d.total_pending:(nom-resp);
-    document.getElementById('statTotal').textContent=resp;
+  function setStat(stats){
+    const items=[
+      {label:'NPS Score',value:(stats.nps||0).toFixed(1),cls:nc(stats.nps||0)},
+      {label:'Promoters',value:stats.p||0,cls:'text-success'},
+      {label:'Passives',value:stats.pa||0,cls:'text-warning'},
+      {label:'Detractors',value:stats.d||0,cls:'text-danger'},
+      {label:'Response Rate',value:stats.nom?(stats.resp/stats.nom*100).toFixed(0)+'%':'0%',cls:''},
+      {label:'Responded',value:stats.resp||0,cls:''},
+      {label:'Pending',value:(stats.nom||0)-(stats.resp||0),cls:'text-warning'},
+      {label:'Nominated',value:stats.nom||0,cls:''},
+    ];
+    statRow.innerHTML=items.map(i=>`<div class="stat-box"><div class="label">${i.label}</div><div class="value ${i.cls}">${i.value}</div></div>`).join('');
   }
 
   function buildLeaderTable(leaders){
-    if(!leaders||!leaders.length)return'<p class="text-muted">No leader data.</p>';
-    let h=`<div class="card mb-3"><div class="card-body p-2"><h6 class="mb-2">Leader Breakdown</h6>
-      <table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>
-      <th>Leader</th><th class="text-center">Nom</th><th class="text-center">Resp</th><th class="text-center">Pend</th>
-      <th class="text-center">Rate</th><th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
-      <th class="text-center text-danger">D</th><th class="text-center">NPS</th></tr></thead><tbody>`;
+    if(!leaders||!leaders.length)return'<p class="text-muted">No leader data available.</p>';
+    let h=`<table class="table table-sm table-hover bg-white rounded"><thead class="table-light"><tr>
+      <th>Leader</th><th class="text-center">Nominated</th><th class="text-center">Responded</th>
+      <th class="text-center">Pending</th><th class="text-center">Rate</th>
+      <th class="text-center text-success">Promoters</th><th class="text-center text-warning">Passives</th>
+      <th class="text-center text-danger">Detractors</th><th class="text-center">NPS</th></tr></thead><tbody>`;
     for(const l of leaders){
-      h+=`<tr><td><strong>${l.leader}</strong></td><td class="text-center">${l.nominated}</td>
-        <td class="text-center">${l.responded}</td>
-        <td class="text-center">${l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'0'}</td>
+      h+=`<tr><td><strong>${l.leader}</strong></td>
+        <td class="text-center">${l.nominated}</td><td class="text-center">${l.responded}</td>
+        <td class="text-center">${l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'<span class="badge bg-success">0</span>'}</td>
         <td class="text-center">${(l.response_rate*100).toFixed(0)}%</td>
-        <td class="text-center">${l.promoter_count}</td><td class="text-center">${l.passive_count}</td>
-        <td class="text-center">${l.detractor_count}</td>
+        <td class="text-center">${l.promoter_count} <small class="text-muted">(${pct(l.promoter_count,l.responded)}%)</small></td>
+        <td class="text-center">${l.passive_count} <small class="text-muted">(${pct(l.passive_count,l.responded)}%)</small></td>
+        <td class="text-center">${l.detractor_count} <small class="text-muted">(${pct(l.detractor_count,l.responded)}%)</small></td>
         <td class="text-center"><strong class="${nc(l.nps_score)}">${l.nps_score.toFixed(1)}</strong></td></tr>`;
     }
-    return h+'</tbody></table></div></div>';
+    return h+'</tbody></table>';
   }
 
-  function buildSummaryPane(d,active){
-    let h=`<div class="tab-pane fade ${active?'show active':''}" id="pane-summary">`;
+  function buildSummaryPane(d){
+    let h='<div class="tab-pane fade show active" id="pane-all" role="tabpanel">';
     if(d.org_summaries&&d.org_summaries.length){
-      h+=`<div class="card mb-3"><div class="card-body p-2"><h6>Per-Organization Comparison</h6>
-        <table class="table table-sm table-hover mb-0"><thead class="table-light"><tr>
-        <th>Org</th><th>Cycle</th><th class="text-center">NPS</th><th class="text-center">Nom</th>
-        <th class="text-center">Resp</th><th class="text-center">Pend</th><th class="text-center">Rate</th>
+      h+=`<h6 class="mb-2">Organization Comparison</h6>
+        <table class="table table-sm table-hover bg-white rounded"><thead class="table-light"><tr>
+        <th>Organization</th><th>Cycle</th><th class="text-center">NPS</th><th class="text-center">Nominated</th>
+        <th class="text-center">Responded</th><th class="text-center">Pending</th><th class="text-center">Rate</th>
         <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
         <th class="text-center text-danger">D</th></tr></thead><tbody>`;
       for(const o of d.org_summaries){
-        const p=o.total_nominated-o.total_responded;
+        const pend=o.total_nominated-o.total_responded;
         h+=`<tr><td><strong>${o.org_name}</strong></td><td>${o.cycle_name}</td>
           <td class="text-center"><strong class="${nc(o.nps_score)}">${o.nps_score}</strong></td>
           <td class="text-center">${o.total_nominated}</td><td class="text-center">${o.total_responded}</td>
-          <td class="text-center">${p>0?'<span class="badge bg-warning text-dark">'+p+'</span>':'0'}</td>
+          <td class="text-center">${pend>0?'<span class="badge bg-warning text-dark">'+pend+'</span>':'0'}</td>
           <td class="text-center">${(o.response_rate*100).toFixed(0)}%</td>
           <td class="text-center">${o.promoter_count}</td><td class="text-center">${o.passive_count}</td>
           <td class="text-center">${o.detractor_count}</td></tr>`;
       }
-      h+='</tbody></table></div></div>';
+      h+='</tbody></table>';
     }
     return h+'</div>';
   }
 
-  function buildOrgPane(org,summaries,leaders,active){
+  function buildOrgPane(orgId,summaries,leaders){
     const latest=summaries.length?summaries[summaries.length-1]:null;
-    let h=`<div class="tab-pane fade ${active?'show active':''}" id="pane-${org.org_id}">`;
-    if(!latest){h+='<p class="text-muted">No survey cycles found.</p></div>';return h;}
-    h+=`<h6 class="text-muted mb-3">Cycle: ${cn(latest)}</h6>`;
+    let h=`<div class="tab-pane fade" id="pane-${orgId}" role="tabpanel">`;
+    if(!latest)return h+'<p class="text-muted">No survey cycles found.</p></div>';
+    h+=`<h6 class="text-muted mb-3">Current Cycle: ${cn(latest)}</h6>`;
     h+=buildLeaderTable(leaders);
     if(summaries.length>1){
-      h+=`<div class="card mb-3"><div class="card-body p-2"><h6>Trend</h6>
-        <table class="table table-sm table-striped mb-0"><thead><tr><th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>`;
-      for(const s of summaries){
-        h+=`<tr><td>${cn(s)}</td><td><strong class="${nc(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
-          <td>${s.promoter_count}</td><td>${s.passive_count}</td><td>${s.detractor_count}</td>
-          <td>${s.total_responded}</td><td>${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(1)}%</td></tr>`;
-      }
-      h+='</tbody></table></div></div>';
+      h+=`<h6 class="mt-3 mb-2">Trend</h6><table class="table table-sm table-striped bg-white rounded"><thead><tr>
+        <th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>`;
+      for(const s of summaries)h+=`<tr><td>${cn(s)}</td><td><strong class="${nc(s.nps_score)}">${s.nps_score.toFixed(1)}</strong></td>
+        <td>${s.promoter_count}</td><td>${s.passive_count}</td><td>${s.detractor_count}</td>
+        <td>${s.total_responded}</td><td>${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(1)}%</td></tr>`;
+      h+='</tbody></table>';
     }
     return h+'</div>';
+  }
+
+  function addTab(id,label,active){
+    const li=document.createElement('li');li.className='nav-item';
+    li.innerHTML=`<button class="nav-link ${active?'active':''}" data-bs-toggle="tab" data-bs-target="#${id}" type="button" role="tab">${label}</button>`;
+    tabsEl.appendChild(li);
   }
 
   async function load(){
     try{
       const orgs=await F('/nps/orgs');
-      allData.orgs=orgs.filter(o=>o.is_active);
+      DATA.orgs=orgs.filter(o=>o.is_active);
       loading.classList.add('d-none');
-      if(!allData.orgs.length){noOrgs.classList.remove('d-none');return;}
-      filterBar.classList.remove('d-none');
-      summaryBar.classList.remove('d-none');
-      tabs.classList.remove('d-none');
+      main.classList.remove('d-none');
+      if(!DATA.orgs.length)return;
 
-      // Populate org filter
-      const fOrg=document.getElementById('filterOrg');
-      for(const o of allData.orgs){
-        const opt=document.createElement('option');opt.value=o.org_id;opt.textContent=o.org_name;fOrg.appendChild(opt);
-      }
+      // Summary
+      DATA.summary=await F('/nps/dashboard/summary');
+      setStat({nps:DATA.summary.overall_nps,p:DATA.summary.total_promoters,pa:DATA.summary.total_passives,
+        d:DATA.summary.total_detractors,resp:DATA.summary.total_responded,nom:DATA.summary.total_nominated});
 
-      // Load summary
-      allData.summaryData=await F('/nps/dashboard/summary');
-      updateSummaryBar(allData.summaryData);
-      addTab('pane-summary','All Orgs',true);
-      content.insertAdjacentHTML('beforeend',buildSummaryPane(allData.summaryData,true));
+      // All Orgs tab
+      addTab('pane-all','All Orgs',true);
+      contentEl.insertAdjacentHTML('beforeend',buildSummaryPane(DATA.summary));
 
-      // Load each org
-      for(const org of allData.orgs){
+      // Per-org tabs
+      const fLeader=document.getElementById('fLeader');
+      for(const org of DATA.orgs){
         addTab('pane-'+org.org_id,org.org_name,false);
         let sums=[];try{sums=await F('/nps/dashboard?org_id='+encodeURIComponent(org.org_id));if(!Array.isArray(sums))sums=[sums];}catch(e){}
         let leaders=[];
         if(sums.length){try{leaders=await F('/nps/dashboard/leaders?org_id='+encodeURIComponent(org.org_id)+'&cycle_id='+encodeURIComponent(sums[sums.length-1].cycle_id));}catch(e){}}
-        allData.orgData[org.org_id]={summaries:sums,leaders:leaders};
+        DATA.orgMap[org.org_id]={sums,leaders,org};
+        contentEl.insertAdjacentHTML('beforeend',buildOrgPane(org.org_id,sums,leaders));
 
         // Populate leader filter
-        const fL=document.getElementById('filterLeader');
         for(const l of leaders){
-          if(!Array.from(fL.options).some(o=>o.value===l.leader)){
-            const opt=document.createElement('option');opt.value=l.leader;opt.textContent=l.leader;fL.appendChild(opt);
+          if(!Array.from(fLeader.options).some(o=>o.value===l.leader)){
+            fLeader.add(new Option(l.leader,l.leader));
           }
         }
-        content.insertAdjacentHTML('beforeend',buildOrgPane(org,sums,leaders,false));
       }
 
-      // Filter: org select switches tab
-      fOrg.addEventListener('change',function(){
-        const v=this.value;
-        if(!v){document.querySelector('[data-bs-target="#pane-summary"]').click();updateSummaryBar(allData.summaryData);}
-        else{const btn=document.querySelector('[data-bs-target="#pane-'+v+'"]');if(btn)btn.click();
-          const d=allData.orgData[v];if(d&&d.summaries.length){const s=d.summaries[d.summaries.length-1];updateSummaryBar(s);}}
+      // Tab click updates stat bar
+      tabsEl.addEventListener('click',function(e){
+        const btn=e.target.closest('.nav-link');if(!btn)return;
+        const target=btn.getAttribute('data-bs-target');
+        if(target==='#pane-all'){
+          setStat({nps:DATA.summary.overall_nps,p:DATA.summary.total_promoters,pa:DATA.summary.total_passives,
+            d:DATA.summary.total_detractors,resp:DATA.summary.total_responded,nom:DATA.summary.total_nominated});
+        } else {
+          const oid=target.replace('#pane-','');
+          const od=DATA.orgMap[oid];
+          if(od&&od.sums.length){const s=od.sums[od.sums.length-1];
+            setStat({nps:s.nps_score,p:s.promoter_count,pa:s.passive_count,d:s.detractor_count,resp:s.total_responded,nom:s.total_nominated});}
+        }
       });
-      document.getElementById('clearFilters').addEventListener('click',function(){
-        document.getElementById('filterOrg').value='';document.getElementById('filterCycle').value='';document.getElementById('filterLeader').value='';
-        document.querySelector('[data-bs-target="#pane-summary"]').click();updateSummaryBar(allData.summaryData);
+
+      // Clear filters
+      document.getElementById('btnClear').addEventListener('click',function(){
+        document.getElementById('fCycle').value='';document.getElementById('fLeader').value='';document.getElementById('fCategory').value='';
+        document.querySelector('[data-bs-target="#pane-all"]').click();
       });
-    }catch(e){loading.classList.add('d-none');noOrgs.textContent='Error: '+e.message;noOrgs.classList.remove('d-none');}
+
+    }catch(e){loading.classList.add('d-none');main.classList.remove('d-none');
+      main.innerHTML='<div class="alert alert-danger">Error: '+e.message+'</div>';}
   }
+
+  async function checkAsanaAuth(){
+    try{
+      const r=await fetch('/nps/auth/status');
+      if(!r.ok)return;
+      const d=await r.json();
+      // Hide the banner whenever any auth mode (pat or oauth) is active.
+      if(!d.authorized){document.getElementById('asanaBanner').classList.remove('d-none');}
+    }catch(_){}
+  }
+
+  checkAsanaAuth();
   load();
 })();
 </script>

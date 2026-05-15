@@ -1,19 +1,35 @@
-"""ASANA REST API wrapper using OAuth2 authentication.
+"""ASANA REST API wrapper.
 
-Uses OAuth2 Authorization Code flow. Tokens are stored in DynamoDB
-(NpsOrgConfig table as a system record) and auto-refreshed when expired.
+Supports two authentication modes (resolved in priority order on each call):
 
-Setup flow:
-1. User visits /nps/auth/asana → redirected to ASANA login
-2. ASANA redirects back to /nps/auth/callback with an auth code
-3. App exchanges code for access_token + refresh_token
-4. Tokens stored in DynamoDB, used for all API calls
-5. When access_token expires, refresh_token is used to get a new one
+1. **PAT (Personal Access Token)** — preferred for prod.
+   Source priority:
+     a. ``ASANA_PAT`` env var (used in dev, or as override in prod)
+     b. AWS Secrets Manager (secret id from ``ASANA_PAT_SECRET_ID`` env
+        var, default ``nps-survey/asana-pat``; key ``ASANA_PAT``)
+   PATs are static, long-lived tokens issued from Asana's UI. No refresh
+   dance needed.
+
+2. **OAuth2 Authorization Code flow** — fallback / future use.
+   Refresh tokens stored in DynamoDB (NpsOrgConfig table). Auto-refreshed
+   on 401. Kept in the codebase so we can re-enable OAuth (e.g. multi-user
+   flows) without re-implementing it.
+
+The active mode is determined by ``_resolve_token()`` — the first source
+that yields a non-empty token wins. PAT sources are checked first.
+
+Setup notes:
+- Prod: store PAT in Secrets Manager (``nps-survey/asana-pat`` → key
+  ``ASANA_PAT``). The EC2 IAM role needs ``secretsmanager:GetSecretValue``
+  on that ARN.
+- Dev: set ``ASANA_PAT`` env var directly (skip Secrets Manager).
 """
 
 import json
 import logging
 import os
+import secrets
+from urllib.parse import urlencode
 
 import requests
 
@@ -23,8 +39,15 @@ ASANA_BASE_URL = "https://app.asana.com/api/1.0"
 ASANA_TOKEN_URL = "https://app.asana.com/-/oauth_token"
 ASANA_AUTHORIZE_URL = "https://app.asana.com/-/oauth_authorize"
 
-# In-memory token cache (loaded from DynamoDB on first use)
+DEFAULT_PAT_SECRET_ID = "nps-survey/asana-pat"
+PAT_SECRET_KEY = "ASANA_PAT"
+
+# In-memory caches. Cleared via clear_tokens() (used in tests).
 _token_cache = {"access_token": "", "refresh_token": ""}
+_pat_cache: dict = {"value": "", "source": ""}
+
+
+# ── Configuration accessors ──────────────────────────────────────
 
 
 def _get_client_id() -> str:
@@ -39,28 +62,103 @@ def _get_redirect_uri() -> str:
     return os.environ.get("ASANA_REDIRECT_URI", "http://localhost:5000/nps/auth/callback")
 
 
-def get_authorize_url() -> str:
+def _get_pat_secret_id() -> str:
+    return os.environ.get("ASANA_PAT_SECRET_ID", DEFAULT_PAT_SECRET_ID)
+
+
+# ── PAT resolution ───────────────────────────────────────────────
+
+
+def _load_pat_from_env() -> str:
+    return os.environ.get("ASANA_PAT", "").strip()
+
+
+def _load_pat_from_secrets_manager() -> str:
+    """Fetch PAT from AWS Secrets Manager.
+
+    Expects the secret to be a JSON map with key ``ASANA_PAT``. If the
+    secret is a bare string, that string is treated as the PAT directly.
+
+    Returns empty string on any failure (caller decides what to do).
+    """
+    try:
+        import boto3
+    except ImportError:  # pragma: no cover — boto3 is a runtime dep
+        return ""
+
+    secret_id = _get_pat_secret_id()
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-south-1"
+    try:
+        client = boto3.client("secretsmanager", region_name=region)
+        resp = client.get_secret_value(SecretId=secret_id)
+    except Exception as exc:
+        logger.debug("Could not load PAT from Secrets Manager (%s): %s", secret_id, exc)
+        return ""
+
+    raw = resp.get("SecretString", "")
+    if not raw:
+        return ""
+
+    # Try JSON first (the recommended shape: {"ASANA_PAT": "..."})
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            value = parsed.get(PAT_SECRET_KEY) or parsed.get("pat") or ""
+            return str(value).strip()
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back to treating the whole secret string as the PAT
+    return raw.strip()
+
+
+def _resolve_pat() -> str:
+    """Resolve a PAT from env var or Secrets Manager.
+
+    Cached after first successful resolution to avoid hitting Secrets
+    Manager on every API call.
+    """
+    if _pat_cache.get("value"):
+        return _pat_cache["value"]
+
+    pat = _load_pat_from_env()
+    if pat:
+        _pat_cache["value"] = pat
+        _pat_cache["source"] = "env"
+        return pat
+
+    pat = _load_pat_from_secrets_manager()
+    if pat:
+        _pat_cache["value"] = pat
+        _pat_cache["source"] = "secrets_manager"
+        return pat
+
+    return ""
+
+
+# ── OAuth2 helpers (unchanged, kept for fallback / future re-enable) ──
+
+
+def generate_state() -> str:
+    """Generate a random CSRF ``state`` value for the OAuth flow."""
+    return secrets.token_urlsafe(32)
+
+
+def get_authorize_url(state: str = "") -> str:
     """Build the ASANA OAuth2 authorization URL for user redirect."""
-    return (
-        f"{ASANA_AUTHORIZE_URL}"
-        f"?client_id={_get_client_id()}"
-        f"&redirect_uri={_get_redirect_uri()}"
-        f"&response_type=code"
-    )
+    params = {
+        "client_id": _get_client_id(),
+        "redirect_uri": _get_redirect_uri(),
+        "response_type": "code",
+        "scope": "default",
+    }
+    if state:
+        params["state"] = state
+    return f"{ASANA_AUTHORIZE_URL}?{urlencode(params)}"
 
 
 def exchange_code_for_token(code: str) -> dict:
-    """Exchange an authorization code for access + refresh tokens.
-
-    Args:
-        code: The authorization code from ASANA callback.
-
-    Returns:
-        Dict with access_token, refresh_token, expires_in, etc.
-
-    Raises:
-        RuntimeError: If token exchange fails.
-    """
+    """Exchange an authorization code for access + refresh tokens (OAuth)."""
     resp = requests.post(ASANA_TOKEN_URL, data={
         "grant_type": "authorization_code",
         "client_id": _get_client_id(),
@@ -75,22 +173,12 @@ def exchange_code_for_token(code: str) -> dict:
     data = resp.json()
     _token_cache["access_token"] = data["access_token"]
     _token_cache["refresh_token"] = data["refresh_token"]
-
-    # Persist tokens to DynamoDB
     _save_tokens(data["access_token"], data["refresh_token"])
-
     return data
 
 
 def _refresh_access_token() -> str:
-    """Use the refresh token to get a new access token.
-
-    Returns:
-        The new access token.
-
-    Raises:
-        RuntimeError: If refresh fails (user needs to re-authorize).
-    """
+    """Use the refresh token to get a new access token (OAuth path)."""
     refresh_token = _token_cache.get("refresh_token") or _load_tokens().get("refresh_token", "")
     if not refresh_token:
         raise RuntimeError("No refresh token available. Please authorize at /nps/auth/asana")
@@ -103,13 +191,15 @@ def _refresh_access_token() -> str:
     }, timeout=30)
 
     if resp.status_code != 200:
-        raise RuntimeError(f"Token refresh failed: {resp.status_code} {resp.text}. Re-authorize at /nps/auth/asana")
+        raise RuntimeError(
+            f"Token refresh failed: {resp.status_code} {resp.text}. "
+            "Re-authorize at /nps/auth/asana"
+        )
 
     data = resp.json()
     _token_cache["access_token"] = data["access_token"]
     if "refresh_token" in data:
         _token_cache["refresh_token"] = data["refresh_token"]
-
     _save_tokens(_token_cache["access_token"], _token_cache["refresh_token"])
     return data["access_token"]
 
@@ -156,22 +246,38 @@ def _load_tokens() -> dict:
     return {}
 
 
-def _get_access_token() -> str:
-    """Get a valid access token, refreshing if needed."""
-    if _token_cache.get("access_token"):
-        return _token_cache["access_token"]
+# ── Unified token resolution ─────────────────────────────────────
 
-    # Try loading from DynamoDB
+
+def _resolve_token() -> tuple[str, str]:
+    """Resolve a usable Asana token from any configured source.
+
+    Returns:
+        (token, mode) — mode is "pat" or "oauth"
+
+    Raises:
+        RuntimeError: if no token is available from any source.
+    """
+    pat = _resolve_pat()
+    if pat:
+        return pat, "pat"
+
+    if _token_cache.get("access_token"):
+        return _token_cache["access_token"], "oauth"
+
     tokens = _load_tokens()
     if tokens.get("access_token"):
-        return tokens["access_token"]
+        return tokens["access_token"], "oauth"
 
-    raise RuntimeError("ASANA not authorized. Please visit /nps/auth/asana to connect.")
+    raise RuntimeError(
+        "ASANA not authorized. Set ASANA_PAT (or ASANA_PAT_SECRET_ID for "
+        "Secrets Manager), or complete OAuth at /nps/auth/asana."
+    )
 
 
 def _get_headers() -> dict:
-    """Return authorization headers using OAuth2 access token."""
-    token = _get_access_token()
+    """Return authorization headers using whichever auth mode is active."""
+    token, _ = _resolve_token()
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -179,16 +285,20 @@ def _get_headers() -> dict:
 
 
 def _request_with_refresh(method: str, url: str, **kwargs) -> requests.Response:
-    """Make an API request, auto-refreshing the token on 401."""
-    headers = _get_headers()
-    kwargs["headers"] = headers
+    """Make an API request.
+
+    On 401 in OAuth mode, refresh the access token and retry once.
+    In PAT mode a 401 is propagated — the PAT itself is invalid or
+    revoked and only a human can fix it.
+    """
+    _, mode = _resolve_token()
+    kwargs["headers"] = _get_headers()
     kwargs.setdefault("timeout", 30)
 
     resp = getattr(requests, method)(url, **kwargs)
 
-    if resp.status_code == 401:
-        # Token expired — refresh and retry once
-        logger.info("ASANA token expired, refreshing...")
+    if resp.status_code == 401 and mode == "oauth":
+        logger.info("ASANA OAuth token expired, refreshing...")
         new_token = _refresh_access_token()
         kwargs["headers"] = {
             "Authorization": f"Bearer {new_token}",
@@ -250,12 +360,7 @@ def create_task(project_gid: str, name: str, notes: str, custom_fields: dict) ->
 def register_webhook(resource_gid: str, target_url: str) -> dict:
     """Register a webhook on an ASANA resource."""
     url = f"{ASANA_BASE_URL}/webhooks"
-    payload = {
-        "data": {
-            "resource": resource_gid,
-            "target": target_url,
-        }
-    }
+    payload = {"data": {"resource": resource_gid, "target": target_url}}
     try:
         resp = _request_with_refresh("post", url, json=payload)
         if resp.status_code == 201:
@@ -266,10 +371,7 @@ def register_webhook(resource_gid: str, target_url: str) -> dict:
 
 
 def get_project_custom_fields(project_gid: str) -> list[dict]:
-    """Fetch all custom field settings for a project.
-
-    Useful for discovering custom field GIDs during setup.
-    """
+    """Fetch all custom field settings for a project."""
     url = f"{ASANA_BASE_URL}/projects/{project_gid}/custom_field_settings"
     try:
         resp = _request_with_refresh("get", url)
@@ -281,15 +383,26 @@ def get_project_custom_fields(project_gid: str) -> list[dict]:
 
 
 def is_authorized() -> bool:
-    """Check if ASANA OAuth tokens are available."""
+    """Check if ASANA is authorized via any auth mode (PAT or OAuth)."""
     try:
-        _get_access_token()
+        _resolve_token()
         return True
     except RuntimeError:
         return False
+
+
+def auth_mode() -> str:
+    """Return the current auth mode: ``pat``, ``oauth``, or ``none``."""
+    try:
+        _, mode = _resolve_token()
+        return mode
+    except RuntimeError:
+        return "none"
 
 
 def clear_tokens() -> None:
     """Clear cached tokens (for testing)."""
     _token_cache["access_token"] = ""
     _token_cache["refresh_token"] = ""
+    _pat_cache["value"] = ""
+    _pat_cache["source"] = ""

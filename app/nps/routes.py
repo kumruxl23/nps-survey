@@ -517,33 +517,60 @@ def cycles_view():
 
 
 @nps_bp.route("/auth/asana", methods=["GET"])
+@role_required("admin")
 def asana_auth():
-    """Redirect user to ASANA OAuth2 authorization page."""
-    url = asana_client.get_authorize_url()
-    from flask import redirect
-    return redirect(url)
+    """Redirect user to ASANA OAuth2 authorization page.
+
+    Only admins can initiate the connection — OAuth tokens are shared
+    across the whole tool, so this is a one-time setup action.
+    """
+    from flask import redirect, session
+    state = asana_client.generate_state()
+    session["asana_oauth_state"] = state
+    return redirect(asana_client.get_authorize_url(state=state))
 
 
 @nps_bp.route("/auth/callback", methods=["GET"])
 def asana_callback():
-    """Handle ASANA OAuth2 callback with authorization code."""
+    """Handle ASANA OAuth2 callback with authorization code.
+
+    Validates the ``state`` parameter against the value stored in the
+    admin's session to prevent CSRF. Only an admin who initiated the
+    flow will have a matching ``state`` in their session.
+    """
+    from flask import session
+
     code = request.args.get("code")
     error = request.args.get("error")
+    returned_state = request.args.get("state", "")
+    expected_state = session.pop("asana_oauth_state", "")
 
     if error:
         return jsonify({"error": f"ASANA authorization denied: {error}"}), 400
+
+    if not expected_state or returned_state != expected_state:
+        return jsonify({"error": "Invalid OAuth state (possible CSRF)"}), 400
 
     if not code:
         return jsonify({"error": "No authorization code received"}), 400
 
     try:
-        token_data = asana_client.exchange_code_for_token(code)
+        asana_client.exchange_code_for_token(code)
         return render_template("nps_auth_success.html")
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
 
 
 @nps_bp.route("/auth/status", methods=["GET"])
+@login_required
 def asana_auth_status():
-    """Check if ASANA is authorized."""
-    return jsonify({"authorized": asana_client.is_authorized()})
+    """Report Asana authorization state.
+
+    Returns ``{"authorized": bool, "mode": "pat"|"oauth"|"none"}`` so
+    the dashboard can distinguish between PAT (no admin action needed)
+    and OAuth-not-yet-connected states.
+    """
+    return jsonify({
+        "authorized": asana_client.is_authorized(),
+        "mode": asana_client.auth_mode(),
+    })

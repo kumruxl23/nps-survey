@@ -112,6 +112,25 @@ def update_user_role(username: str, role: str) -> None:
     )
 
 
+def update_password(username: str, new_password: str) -> None:
+    """Reset a user's password. Generates a fresh salt and re-hashes."""
+    if not new_password:
+        raise ValueError("Password cannot be empty")
+    table = _get_table()
+    user_key = f"__user__{username}"
+    existing = table.get_item(Key={"org_id": user_key}).get("Item")
+    if not existing:
+        raise ValueError(f"User '{username}' not found")
+
+    salt = secrets.token_hex(16)
+    hashed = _hash_password(new_password, salt)
+    table.update_item(
+        Key={"org_id": user_key},
+        UpdateExpression="SET asana_form_url = :s, custom_field_nps_score_gid = :h",
+        ExpressionAttributeValues={":s": salt, ":h": hashed},
+    )
+
+
 def delete_user(username: str) -> None:
     """Deactivate a user."""
     table = _get_table()
