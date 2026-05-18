@@ -382,6 +382,45 @@ def get_project_custom_fields(project_gid: str) -> list[dict]:
         raise RuntimeError(f"Request failed: {exc}") from exc
 
 
+def list_tasks_in_project(project_gid: str, opt_fields: str | None = None) -> list[dict]:
+    """List every task in an Asana project, paginating through all pages.
+
+    Args:
+        project_gid: Asana project GID.
+        opt_fields: Comma-separated field names to include in each task. Pass
+            something like "name,custom_fields,created_at,assignee.name" to
+            avoid extra round-trips. Default keeps the response minimal.
+
+    Returns:
+        Flat list of task dicts (across all pages).
+    """
+    if opt_fields is None:
+        opt_fields = "name,custom_fields,created_at,completed_at,assignee.name,assignee.email"
+
+    url = f"{ASANA_BASE_URL}/projects/{project_gid}/tasks"
+    params: dict[str, str | int] = {"opt_fields": opt_fields, "limit": 100}
+    tasks: list[dict] = []
+
+    while True:
+        try:
+            resp = _request_with_refresh("get", url, params=params)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Request failed: {exc}") from exc
+
+        if resp.status_code != 200:
+            raise RuntimeError(f"ASANA API error {resp.status_code}: {resp.text}")
+
+        body = resp.json()
+        tasks.extend(body.get("data", []))
+
+        next_page = body.get("next_page")
+        if not next_page or not next_page.get("offset"):
+            break
+        params["offset"] = next_page["offset"]
+
+    return tasks
+
+
 def is_authorized() -> bool:
     """Check if ASANA is authorized via any auth mode (PAT or OAuth)."""
     try:
