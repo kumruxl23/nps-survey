@@ -61,6 +61,11 @@ from datetime import datetime, timezone
 # Add /opt/nps-survey to the path so `app.*` imports resolve
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Default region for the running app — set BEFORE importing repos so boto3
+# picks it up when they call boto3.resource("dynamodb") without a region.
+os.environ.setdefault("AWS_REGION", "ap-south-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
+
 from app.db import (  # noqa: E402
     nps_cycle_repo,
     nps_nomination_repo,
