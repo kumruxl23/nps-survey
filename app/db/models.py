@@ -17,6 +17,7 @@ class OrgConfig:
     custom_field_nps_score_gid: str
     custom_field_category_gid: str
     custom_field_org_name_gid: str
+    custom_field_leader_gid: str = ""
     quip_doc_id: str = ""
     reminder_channels: list[ReminderChannel] = field(default_factory=lambda: ["email"])
     slack_bot_token: str = ""

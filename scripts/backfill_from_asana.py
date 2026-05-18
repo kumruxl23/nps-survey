@@ -92,6 +92,7 @@ GID_NAME_MAP = {
     "custom_field_nps_score_gid": ("nps score", "score"),
     "custom_field_category_gid": ("category",),
     "custom_field_org_name_gid": ("org name", "org"),
+    "custom_field_leader_gid": ("leader",),
 }
 
 
@@ -246,16 +247,29 @@ def _ensure_h1_cycle(org_id: str, project_gid: str, form_url: str, dry_run: bool
 
 
 def backfill_org(org, dry_run: bool) -> dict[str, int]:
-    """Pull every task from the org's Asana project into a Nomination/Response."""
+    """Pull every task from the org's Asana project into a Nomination/Response.
+
+    Leader is read from the Asana ``Leader`` enum custom field (the value the
+    respondent picked on the form), NOT from the task's assignee.
+
+    Per Q3.B (May 2026): every responder gets a Nomination row, even if they
+    weren't on the targeted stakeholder list — we use the leader they picked
+    on the form for that nomination.
+    """
     stats = {"tasks": 0, "skipped_no_score": 0, "responses": 0, "nominations": 0}
 
     nps_gid = org.custom_field_nps_score_gid
     cat_gid = org.custom_field_category_gid
+    leader_gid = getattr(org, "custom_field_leader_gid", "") or ""
 
     if _is_placeholder_gid(nps_gid):
         logger.error("[%s] custom_field_nps_score_gid is still a placeholder ('%s'). "
                      "Run --fix-gids first.", org.org_id, nps_gid)
         return stats
+
+    if _is_placeholder_gid(leader_gid):
+        logger.warning("[%s] custom_field_leader_gid is missing/placeholder. "
+                       "Leader values will be empty. Run --fix-gids first.", org.org_id)
 
     cycle_id = _ensure_h1_cycle(org.org_id, org.asana_project_gid, org.asana_form_url, dry_run)
 
@@ -294,7 +308,7 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
             stats["skipped_no_score"] += 1
             continue
 
-        # Category — prefer Asana's enum value, fall back to computed category
+        # Category — prefer Asana's enum, fall back to computed
         category_raw = _custom_field_value(task, cat_gid) if cat_gid else None
         if isinstance(category_raw, str) and category_raw.strip():
             category = category_raw.strip().capitalize()
@@ -303,31 +317,37 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
         else:
             category = _categorize(score)
 
-        # Leader — first try assignee.name, otherwise blank
+        # Leader — read from the form's enum field (the value the respondent picked)
+        leader_raw = _custom_field_value(task, leader_gid) if leader_gid else None
+        leader = (leader_raw or "").strip() if isinstance(leader_raw, str) else ""
+
+        # Respondent identity — used for matching against existing nominations + creating one if missing
         assignee = task.get("assignee") or {}
-        leader = assignee.get("name", "") or ""
         email = (assignee.get("email") or "").lower()
         respondent_name = assignee.get("name", "") or ""
 
         recorded_at = task.get("completed_at") or task.get("created_at") \
             or datetime.now(timezone.utc).isoformat()
 
-        # Optional nomination so the dashboard's response_rate is meaningful
-        if email:
-            nomination = Nomination(
-                org_id=org.org_id,
-                cycle_id=cycle_id,
-                email=email,
-                name=respondent_name,
-                leader=leader,
-                responded=True,
-                responded_at=recorded_at,
-            )
-            if dry_run:
-                logger.debug("[%s] DRY RUN nomination: %s", org.org_id, asdict(nomination))
-            else:
-                nps_nomination_repo.put_nomination(nomination)
-            stats["nominations"] += 1
+        # Per Q3.B: always create a nomination row for the responder — even if they
+        # weren't on the targeted list. Email key is required for the table; if no
+        # email available, fabricate one from task GID so the row stays unique.
+        nomination_email = email or f"asana-task-{task.get('gid', 'unknown')}@unknown.local"
+        nomination = Nomination(
+            org_id=org.org_id,
+            cycle_id=cycle_id,
+            email=nomination_email,
+            name=respondent_name or nomination_email.split("@")[0],
+            leader=leader,
+            responded=True,
+            responded_at=recorded_at,
+        )
+        if dry_run:
+            logger.debug("[%s] DRY RUN nomination: leader='%s' email='%s'",
+                         org.org_id, leader, nomination_email)
+        else:
+            nps_nomination_repo.put_nomination(nomination)
+        stats["nominations"] += 1
 
         response = NpsResponse(
             org_id=org.org_id,
