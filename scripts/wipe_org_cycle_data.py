@@ -79,6 +79,9 @@ def main() -> None:
                         help="Read-only — count items, do not delete.")
     parser.add_argument("--force", action="store_true",
                         help="Skip the typed-confirmation prompt.")
+    parser.add_argument("--include-cycle-row", action="store_true",
+                        help="Also delete the SurveyCycle row itself (use when "
+                             "renaming/retiring a cycle entirely).")
     args = parser.parse_args()
 
     pk = f"{args.org}#{args.cycle}"
@@ -89,18 +92,27 @@ def main() -> None:
     logger.info("Found %d nominations + %d responses to delete",
                 len(nominations), len(responses))
 
+    cycle_row = None
+    if args.include_cycle_row:
+        ddb = boto3.resource("dynamodb", region_name=REGION)
+        cycle_table = ddb.Table(os.environ.get("NPS_SURVEY_CYCLES_TABLE", "NpsSurveyCycles"))
+        resp = cycle_table.get_item(Key={"org_id": args.org, "cycle_id": args.cycle})
+        cycle_row = resp.get("Item")
+        logger.info("Cycle row %s/%s present: %s", args.org, args.cycle, bool(cycle_row))
+
     if args.dry_run:
         logger.info("DRY RUN — nothing deleted.")
         return
 
-    if not nominations and not responses:
+    if not nominations and not responses and not cycle_row:
         logger.info("Nothing to delete. Done.")
         return
 
     if not args.force:
+        extra = " + cycle row" if cycle_row else ""
         confirm = input(
-            f'\nThis will DELETE {len(nominations)} nominations + {len(responses)} responses '
-            f'for org={args.org} cycle={args.cycle}.\n'
+            f'\nThis will DELETE {len(nominations)} nominations + {len(responses)} responses'
+            f'{extra} for org={args.org} cycle={args.cycle}.\n'
             f'Type "WIPE {args.org} {args.cycle}" to proceed: '
         ).strip()
         if confirm != f"WIPE {args.org} {args.cycle}":
@@ -110,6 +122,12 @@ def main() -> None:
     n_deleted = _delete_items(NOMINATIONS_TABLE, ("org_id_cycle_id", "email"), nominations)
     r_deleted = _delete_items(RESPONSES_TABLE, ("org_id_cycle_id", "response_id"), responses)
     logger.info("Deleted %d nominations + %d responses", n_deleted, r_deleted)
+
+    if args.include_cycle_row and cycle_row:
+        ddb = boto3.resource("dynamodb", region_name=REGION)
+        cycle_table = ddb.Table(os.environ.get("NPS_SURVEY_CYCLES_TABLE", "NpsSurveyCycles"))
+        cycle_table.delete_item(Key={"org_id": args.org, "cycle_id": args.cycle})
+        logger.info("Deleted SurveyCycle row %s/%s", args.org, args.cycle)
 
 
 if __name__ == "__main__":

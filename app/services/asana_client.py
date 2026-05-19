@@ -398,9 +398,39 @@ def list_tasks_in_project(project_gid: str, opt_fields: str | None = None) -> li
         opt_fields = "name,custom_fields,created_at,completed_at,assignee.name,assignee.email"
 
     url = f"{ASANA_BASE_URL}/projects/{project_gid}/tasks"
-    params: dict[str, str | int] = {"opt_fields": opt_fields, "limit": 100}
-    tasks: list[dict] = []
+    return _paginate_get(url, opt_fields)
 
+
+def list_sections(project_gid: str) -> list[dict]:
+    """List sections in an Asana project."""
+    url = f"{ASANA_BASE_URL}/projects/{project_gid}/sections"
+    try:
+        resp = _request_with_refresh("get", url, params={"limit": 100})
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Request failed: {exc}") from exc
+    if resp.status_code != 200:
+        raise RuntimeError(f"ASANA API error {resp.status_code}: {resp.text}")
+    return resp.json().get("data", [])
+
+
+def list_tasks_in_section(section_gid: str, opt_fields: str | None = None) -> list[dict]:
+    """List every task in an Asana section, paginating through all pages.
+
+    Use this instead of ``list_tasks_in_project`` when you only want tasks
+    from a specific section (e.g. the "H1 2026" section, ignoring archived
+    sections from previous cycles).
+    """
+    if opt_fields is None:
+        opt_fields = "name,custom_fields,created_at,completed_at,assignee.name,assignee.email"
+
+    url = f"{ASANA_BASE_URL}/sections/{section_gid}/tasks"
+    return _paginate_get(url, opt_fields)
+
+
+def _paginate_get(url: str, opt_fields: str) -> list[dict]:
+    """Helper: paginate a GET that returns ``{data, next_page}`` envelopes."""
+    params: dict[str, str | int] = {"opt_fields": opt_fields, "limit": 100}
+    out: list[dict] = []
     while True:
         try:
             resp = _request_with_refresh("get", url, params=params)
@@ -411,14 +441,13 @@ def list_tasks_in_project(project_gid: str, opt_fields: str | None = None) -> li
             raise RuntimeError(f"ASANA API error {resp.status_code}: {resp.text}")
 
         body = resp.json()
-        tasks.extend(body.get("data", []))
+        out.extend(body.get("data", []))
 
         next_page = body.get("next_page")
         if not next_page or not next_page.get("offset"):
             break
         params["offset"] = next_page["offset"]
-
-    return tasks
+    return out
 
 
 def is_authorized() -> bool:

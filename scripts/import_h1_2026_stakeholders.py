@@ -68,7 +68,7 @@ STAKEHOLDER_LIST_COLS = {
     "responded": "Responded",
 }
 
-DEFAULT_CYCLE_ID = "h1-2026-backfill"
+DEFAULT_CYCLE_ID = "h1-2026"
 
 
 def _norm_leader_name(name: str) -> str:

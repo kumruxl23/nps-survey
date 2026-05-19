@@ -79,13 +79,18 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("backfill")
 
 # ---------------------------------------------------------------------------
-# Cycle config — one bucket for all of H1 2026
+# Cycle config — H1 2026, ongoing
 # ---------------------------------------------------------------------------
 
-H1_2026_CYCLE_ID = "h1-2026-backfill"
+H1_2026_CYCLE_ID = "h1-2026"
 H1_2026_START = "2026-01-01"
 H1_2026_END = "2026-06-30"
-H1_2026_NAME = "H1 2026 (backfill)"
+H1_2026_NAME = "H1 2026"
+H1_2026_STATUS = "active"  # cycle is in-flight, not archived
+
+# Asana section name to filter to. Anything not in this section (older
+# cycles archived under their own section headers) is ignored.
+ACTIVE_SECTION_NAME = "H1 2026"
 
 # Custom field name -> org_config_repo field name
 GID_NAME_MAP = {
@@ -220,10 +225,13 @@ def _custom_field_value(task: dict, gid: str) -> object | None:
 
 
 def _ensure_h1_cycle(org_id: str, project_gid: str, form_url: str, dry_run: bool) -> str:
-    """Create the H1-2026 cycle for an org if it doesn't exist. Return the cycle_id."""
+    """Create or refresh the H1-2026 cycle for an org. Returns the cycle_id.
+
+    If a cycle already exists, leaves it alone (assume it's already correct).
+    """
     existing = nps_cycle_repo.get_cycle(org_id, H1_2026_CYCLE_ID)
     if existing:
-        logger.info("[%s] H1-2026 cycle already exists", org_id)
+        logger.info("[%s] %s cycle already exists", org_id, H1_2026_CYCLE_ID)
         return H1_2026_CYCLE_ID
 
     cycle = SurveyCycle(
@@ -231,7 +239,7 @@ def _ensure_h1_cycle(org_id: str, project_gid: str, form_url: str, dry_run: bool
         cycle_id=H1_2026_CYCLE_ID,
         start_date=H1_2026_START,
         end_date=H1_2026_END,
-        status="closed",  # backfill — already done
+        status=H1_2026_STATUS,
         reminder_mode="manual",
         asana_project_gid=project_gid,
         asana_form_url=form_url,
@@ -242,7 +250,7 @@ def _ensure_h1_cycle(org_id: str, project_gid: str, form_url: str, dry_run: bool
         return H1_2026_CYCLE_ID
 
     nps_cycle_repo.put_cycle(cycle)
-    logger.info("[%s] created H1-2026 cycle", org_id)
+    logger.info("[%s] created %s cycle", org_id, H1_2026_CYCLE_ID)
     return H1_2026_CYCLE_ID
 
 
@@ -273,14 +281,36 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
 
     cycle_id = _ensure_h1_cycle(org.org_id, org.asana_project_gid, org.asana_form_url, dry_run)
 
-    logger.info("[%s] listing tasks in project %s", org.org_id, org.asana_project_gid)
+    # Find the active "H1 2026" section in this Asana project. Older cycles
+    # live under their own archived sections — we explicitly skip them.
     try:
-        tasks = asana_client.list_tasks_in_project(org.asana_project_gid)
+        sections = asana_client.list_sections(org.asana_project_gid)
     except Exception as exc:
-        logger.error("[%s] failed to list tasks: %s", org.org_id, exc)
+        logger.error("[%s] failed to list sections: %s", org.org_id, exc)
         return stats
 
-    logger.info("[%s] %d tasks fetched from Asana", org.org_id, len(tasks))
+    target = next(
+        (s for s in sections
+         if (s.get("name") or "").strip().lower() == ACTIVE_SECTION_NAME.lower()),
+        None,
+    )
+    if target is None:
+        section_names = [s.get("name") for s in sections]
+        logger.error("[%s] no Asana section named '%s' found. Sections: %s",
+                     org.org_id, ACTIVE_SECTION_NAME, section_names)
+        return stats
+
+    section_gid = target["gid"]
+    logger.info("[%s] listing tasks in section '%s' (gid=%s)",
+                org.org_id, target.get("name"), section_gid)
+    try:
+        tasks = asana_client.list_tasks_in_section(section_gid)
+    except Exception as exc:
+        logger.error("[%s] failed to list tasks in section: %s", org.org_id, exc)
+        return stats
+
+    logger.info("[%s] %d tasks fetched from section '%s'",
+                org.org_id, len(tasks), target.get("name"))
 
     for task in tasks:
         stats["tasks"] += 1
