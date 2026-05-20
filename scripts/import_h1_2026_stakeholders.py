@@ -1,29 +1,36 @@
-"""Import H1 2026 targeted-stakeholder nominations from the Sandeep Directs workbook.
+"""Import H1 2026 targeted-stakeholder nominations from per-org workbooks.
 
-Reads the "Sandeep Directs - WHS CPT IN Targeted Stakeholder List for NPS Survey.xlsx"
-workbook and writes a Nomination row for every stakeholder marked "Yes" for
-the H1 2026 targeted-list inclusion question.
+Each WHS team maintains its own targeted-stakeholder workbook. They share the
+same overall shape (an "H1 2026" sheet + a "Stakeholder List" sheet), but
+column names differ slightly between teams. This script handles all three:
 
-How the workbook is parsed:
-- "H1 2026" sheet: PoC, PoC Alias, Stakeholder, Stakeholder Alias, "Should this
-  stakeholder be included in H1 2026 survey? (Targeted list)"
-- "Stakeholder List" sheet: PoC, PoC Alias, Stakeholder Alias, Email, Responded.
-  Used to resolve real email addresses (some are .uk / .pl, not @amazon.com).
+  - whs_cpt_in   :  Sandeep Directs - WHS CPT IN Targeted Stakeholder List ...
+  - whs_cpt_na   :  WHS CPT -NA Targeted Stakeholder List for 2025 NPS Survey
+  - fec          :  FEC - NPS Targeted Stakeholder List
 
-Cross-reference: each H1 2026 row marked "Yes" is matched to the Stakeholder List
-by Stakeholder Alias to get the email. If no match is found, we fall back to
-``<alias>@amazon.com`` and log a warning.
+Org-specific column names are captured in ORG_CONFIGS below. Add a new entry
+to onboard another org.
+
+For each "Yes"-flagged stakeholder on the H1 2026 sheet, this writes a
+``Nomination`` row. Leader is read from the Stakeholder List sheet (which
+has the org's leader-mapping column) where available, falling back to the
+POC name from H1 2026.
 
 Usage (run on the EC2):
 
     /usr/bin/python3.11 scripts/import_h1_2026_stakeholders.py \\
-        --workbook "Sandeep Directs - WHS CPT IN Targeted Stakeholder List for NPS Survey.xlsx" \\
-        --org whs_cpt_in --dry-run
+        --workbook /tmp/cpt_in.xlsx --org whs_cpt_in --dry-run
 
-Then drop --dry-run to actually write.
+    /usr/bin/python3.11 scripts/import_h1_2026_stakeholders.py \\
+        --workbook /tmp/fec.xlsx --org fec --dry-run
 
-The script writes ONLY to NpsNominations. It does NOT touch responses, cycles,
-or org configs.
+    /usr/bin/python3.11 scripts/import_h1_2026_stakeholders.py \\
+        --workbook /tmp/cpt_na.xlsx --org whs_cpt_na --dry-run
+
+Drop --dry-run to actually write.
+
+The script writes ONLY to NpsNominations. It does NOT touch responses,
+cycles, or org configs.
 """
 
 from __future__ import annotations
@@ -47,38 +54,74 @@ from app.db.models import Nomination  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("import_stakeholders")
 
-# Sheet + column conventions
-H1_2026_SHEET = "H1 2026"
-STAKEHOLDER_LIST_SHEET = "Stakeholder List"
-
-H1_2026_COLS = {
-    "poc": "PoC",
-    "poc_alias": "PoC Alias",
-    "stakeholder": "Stakeholder",
-    "stakeholder_alias": "Stakeholder\nAlias",  # has a newline in the header
-    "include_in_h1_2026": "Should this stakeholder be included in\nH1 2026 survey?\n(Targeted list)",
-    "responded": "Did stakeholder respond to\nH1 NPS 2026?",
-}
-
-STAKEHOLDER_LIST_COLS = {
-    "poc": "PoC",
-    "poc_alias": "PoC Alias",
-    "stakeholder_alias": "Stakeholder",  # NB: column 4 is the alias on this sheet, despite the header text
-    "email": "Email",
-    "responded": "Responded",
-}
-
 DEFAULT_CYCLE_ID = "h1-2026"
+
+# Headers shared by all three orgs (same exact text).
+INCLUSION_COL_TEXT = "Should this stakeholder be included in\nH1 2026 survey?\n(Targeted list)"
+RESPONDED_COL_TEXT = "Did stakeholder respond to\nH1 NPS 2026?"
+
+# Per-org column conventions. The 'h1_sheet' map describes the *H1 2026* sheet's
+# column headers; the 'stakeholder_list' map describes the *Stakeholder List*
+# sheet's columns by position (since some have duplicate or trailing-whitespace
+# header text that's awkward to match by string).
+ORG_CONFIGS: dict[str, dict] = {
+    "whs_cpt_in": {
+        "h1_sheet_name": "H1 2026",
+        "h1_sheet_cols": {
+            "poc_name": "PoC",
+            "stakeholder_name": "Stakeholder",
+            "stakeholder_alias": "Stakeholder\nAlias",  # newline in header
+        },
+        "stakeholder_list_sheet_name": "Stakeholder List",
+        # In WHS CPT IN's workbook there is no separate "Leader" column;
+        # POC IS the leader. Position-based read for safety.
+        # Cols (0-indexed): 0=PoC, 1=PoC Alias, 2/3=Stakeholder name/alias mix, 4=Email
+        "stakeholder_list_positions": {
+            "leader_pos": 0,
+            "stakeholder_alias_pos": 3,
+            "email_pos": 4,
+        },
+    },
+    "fec": {
+        "h1_sheet_name": "H1 2026",
+        "h1_sheet_cols": {
+            "poc_name": "WHS FEC POC Name",
+            "stakeholder_name": "Stakeholder Name",
+            "stakeholder_alias": "Stakeholder Login/Alias",
+        },
+        "stakeholder_list_sheet_name": "Stakeholder List",
+        # FEC Stakeholder List cols: 0=WHS FEC Leader, 1=WHS FEC POC Name,
+        # 2=Stakeholder Name, 3=Stakeholder Login/Alias, 4="Email " (trailing space), 5=Responded
+        "stakeholder_list_positions": {
+            "leader_pos": 0,
+            "stakeholder_alias_pos": 3,
+            "email_pos": 4,
+        },
+    },
+    "whs_cpt_na": {
+        "h1_sheet_name": "H1 2026",
+        "h1_sheet_cols": {
+            "poc_name": "WHS CP PoC Name",
+            "stakeholder_name": "Stakeholder Name",
+            "stakeholder_alias": "Stakeholder Login/Alias",
+        },
+        "stakeholder_list_sheet_name": "Stakeholder List",
+        # CPT NA Stakeholder List cols: 0=CP NA Team, 1=WHS CP PoC Name,
+        # 2=Stakeholder Name, 3=Stakeholder Login/Alias, 4=Email, 5=Responded
+        "stakeholder_list_positions": {
+            "leader_pos": 0,
+            "stakeholder_alias_pos": 3,
+            "email_pos": 4,
+        },
+    },
+}
 
 
 def _norm_leader_name(name: str) -> str:
     """Collapse spelling variations (e.g. 'NIdhi Bhagat' -> 'Nidhi Bhagat')."""
     if not name:
         return ""
-    cleaned = " ".join(name.split())  # collapse internal whitespace
-    # Title-case is wrong for names with all-caps surnames; instead, lowercase
-    # the *first* token and re-Title only the case-broken initial char.
-    # Simpler heuristic: re-Title the whole thing.
+    cleaned = " ".join(str(name).split())
     return cleaned.title()
 
 
@@ -87,7 +130,7 @@ def _row_to_dict(headers: list[str], row_values: list) -> dict[str, object]:
 
 
 def _find_header_row(ws, max_check: int = 10) -> int:
-    """Return the 1-indexed row number of the first row with >= 3 non-empty cells."""
+    """Return 1-indexed row number of the first row with >=3 non-empty cells."""
     for r in range(1, min(ws.max_row, max_check) + 1):
         nonempty = sum(1 for c in ws[r] if c.value not in (None, ""))
         if nonempty >= 3:
@@ -95,12 +138,19 @@ def _find_header_row(ws, max_check: int = 10) -> int:
     raise ValueError("No header row found in first 10 rows")
 
 
-def _parse_h1_2026(workbook_path: Path) -> list[dict]:
-    """Return the list of stakeholder rows marked Yes for H1 2026 inclusion."""
+def _parse_h1_2026(workbook_path: Path, cfg: dict) -> list[dict]:
+    """Return rows from the H1 2026 sheet that are flagged Yes for inclusion."""
     wb = openpyxl.load_workbook(workbook_path, data_only=True)
-    ws = wb[H1_2026_SHEET]
+    sheet_name = cfg["h1_sheet_name"]
+    if sheet_name not in wb.sheetnames:
+        raise ValueError(f"Workbook missing sheet '{sheet_name}'. Found: {wb.sheetnames}")
+    ws = wb[sheet_name]
     header_row = _find_header_row(ws)
     headers = [c.value for c in ws[header_row]]
+
+    poc_col = cfg["h1_sheet_cols"]["poc_name"]
+    name_col = cfg["h1_sheet_cols"]["stakeholder_name"]
+    alias_col = cfg["h1_sheet_cols"]["stakeholder_alias"]
 
     yes_rows: list[dict] = []
     for r in range(header_row + 1, ws.max_row + 1):
@@ -108,73 +158,62 @@ def _parse_h1_2026(workbook_path: Path) -> list[dict]:
         if not any(v not in (None, "") for v in values):
             continue
         row = _row_to_dict(headers, values)
-        flag = (row.get(H1_2026_COLS["include_in_h1_2026"]) or "").strip().lower()
-        if flag != "yes":
+
+        flag = (row.get(INCLUSION_COL_TEXT) or "")
+        if str(flag).strip().lower() != "yes":
             continue
+
         yes_rows.append({
-            "poc": _norm_leader_name(str(row.get(H1_2026_COLS["poc"]) or "")),
-            "poc_alias": (row.get(H1_2026_COLS["poc_alias"]) or "").strip().lower(),
-            "stakeholder": (row.get(H1_2026_COLS["stakeholder"]) or "").strip(),
-            "stakeholder_alias": (row.get(H1_2026_COLS["stakeholder_alias"]) or "").strip().lower(),
-            "responded": (row.get(H1_2026_COLS["responded"]) or "").strip().lower(),
+            "poc": _norm_leader_name(str(row.get(poc_col) or "")),
+            "stakeholder": str(row.get(name_col) or "").strip(),
+            "stakeholder_alias": str(row.get(alias_col) or "").strip().lower(),
+            "responded": str(row.get(RESPONDED_COL_TEXT) or "").strip().lower(),
         })
 
     return yes_rows
 
 
-def _parse_stakeholder_list(workbook_path: Path) -> dict[str, dict]:
-    """Return a map of stakeholder_alias -> {email, poc, ...} from the Stakeholder List sheet."""
+def _parse_stakeholder_list(workbook_path: Path, cfg: dict) -> dict[str, dict]:
+    """Return alias -> {email, leader} from the Stakeholder List sheet.
+
+    Reads by column *position* rather than by header text — the headers vary
+    and sometimes contain duplicates / trailing whitespace.
+    """
     wb = openpyxl.load_workbook(workbook_path, data_only=True)
-    if STAKEHOLDER_LIST_SHEET not in wb.sheetnames:
-        logger.warning("Workbook has no '%s' sheet; emails will be constructed from aliases.",
-                       STAKEHOLDER_LIST_SHEET)
+    sheet_name = cfg["stakeholder_list_sheet_name"]
+    if sheet_name not in wb.sheetnames:
+        logger.warning("Workbook missing '%s' sheet; emails will be constructed from aliases.",
+                       sheet_name)
         return {}
 
-    ws = wb[STAKEHOLDER_LIST_SHEET]
-    header_row = _find_header_row(ws)
-    headers = [c.value for c in ws[header_row]]
+    ws = wb[sheet_name]
+    pos = cfg["stakeholder_list_positions"]
+    leader_pos = pos["leader_pos"]
+    alias_pos = pos["stakeholder_alias_pos"]
+    email_pos = pos["email_pos"]
 
-    # The header for col 4 in the Stakeholder List sheet is also "Stakeholder",
-    # which collides. We resolve by position rather than name when needed.
+    header_row = _find_header_row(ws)
     by_alias: dict[str, dict] = {}
+
     for r in range(header_row + 1, ws.max_row + 1):
         values = [c.value for c in ws[r]]
         if not any(v not in (None, "") for v in values):
             continue
-        # Position-based read (safer given the duplicate header)
-        poc = _norm_leader_name(str(values[0] or ""))
-        poc_alias = (values[1] or "").strip().lower() if len(values) > 1 else ""
-        # Column 3 contains the stakeholder alias in this sheet
-        stakeholder_alias = (values[3] or "").strip().lower() if len(values) > 3 else ""
-        email_raw = values[4] if len(values) > 4 else None
+        leader = _norm_leader_name(str(values[leader_pos]) if leader_pos < len(values) and values[leader_pos] else "")
+        stakeholder_alias = (str(values[alias_pos]) if alias_pos < len(values) and values[alias_pos] else "").strip().lower()
+        email_raw = values[email_pos] if email_pos < len(values) else None
         if not stakeholder_alias:
             continue
         email = (str(email_raw) if email_raw else "").strip().lower()
-        if not email and stakeholder_alias:
+        if not email:
             email = f"{stakeholder_alias}@amazon.com"
 
         by_alias[stakeholder_alias] = {
             "email": email,
-            "poc": poc,
-            "poc_alias": poc_alias,
+            "leader": leader,
         }
 
     return by_alias
-
-
-def _ensure_cycle(org_id: str, cycle_id: str, dry_run: bool) -> None:
-    """If the cycle doesn't exist, create a closed H1-2026 cycle."""
-    existing = nps_cycle_repo.get_cycle(org_id, cycle_id)
-    if existing:
-        return
-    logger.info("[%s] cycle %s does not exist", org_id, cycle_id)
-    if dry_run:
-        logger.info("[%s] DRY RUN — would create cycle %s", org_id, cycle_id)
-        return
-    # Defer to backfill_from_asana to actually create cycles. The import
-    # script doesn't own cycle creation.
-    logger.warning("[%s] cycle %s missing — run backfill_from_asana --backfill first "
-                   "to create the cycle.", org_id, cycle_id)
 
 
 def import_nominations(
@@ -183,41 +222,60 @@ def import_nominations(
     cycle_id: str,
     dry_run: bool,
 ) -> dict[str, int]:
+    if org_id not in ORG_CONFIGS:
+        raise ValueError(f"Unknown org '{org_id}'. Known: {list(ORG_CONFIGS.keys())}")
+    cfg = ORG_CONFIGS[org_id]
+
     stats = {
         "yes_rows": 0,
         "matched_in_stakeholder_list": 0,
         "fallback_email_constructed": 0,
+        "fallback_leader_from_poc": 0,
         "nominations_written": 0,
     }
 
-    yes_rows = _parse_h1_2026(workbook_path)
-    stakeholder_map = _parse_stakeholder_list(workbook_path)
+    yes_rows = _parse_h1_2026(workbook_path, cfg)
+    stakeholder_map = _parse_stakeholder_list(workbook_path, cfg)
     stats["yes_rows"] = len(yes_rows)
-    logger.info("Parsed %d 'Yes' rows from %s", len(yes_rows), H1_2026_SHEET)
-    logger.info("Loaded %d entries from %s", len(stakeholder_map), STAKEHOLDER_LIST_SHEET)
+    logger.info("[%s] Parsed %d 'Yes' rows from %s", org_id, len(yes_rows), cfg["h1_sheet_name"])
+    logger.info("[%s] Loaded %d entries from %s",
+                org_id, len(stakeholder_map), cfg["stakeholder_list_sheet_name"])
 
-    _ensure_cycle(org_id, cycle_id, dry_run)
+    # Verify cycle exists; if not, create it (closed-by-default for safety).
+    existing_cycle = nps_cycle_repo.get_cycle(org_id, cycle_id)
+    if not existing_cycle:
+        logger.warning("[%s] cycle %s does not exist. Run backfill_from_asana --backfill "
+                       "first to create the active cycle row, then re-run this script.",
+                       org_id, cycle_id)
+        return stats
 
     seen_emails: set[str] = set()
 
     for row in yes_rows:
         alias = row["stakeholder_alias"]
         if not alias:
-            logger.debug("Skipping row with no stakeholder alias: %s", row)
             continue
 
         sh = stakeholder_map.get(alias)
-        if sh and sh["email"]:
+        if sh and sh.get("email"):
             email = sh["email"]
             stats["matched_in_stakeholder_list"] += 1
         else:
             email = f"{alias}@amazon.com"
             stats["fallback_email_constructed"] += 1
-            logger.debug("No stakeholder-list email for alias '%s', constructed '%s'",
-                         alias, email)
+            logger.debug("[%s] no stakeholder-list email for alias '%s', constructed '%s'",
+                         org_id, alias, email)
+
+        # Leader resolution: Stakeholder List (if present) wins over H1 2026 sheet's POC.
+        # The "leader" concept matters most on FEC/CPT-NA where POC != Leader.
+        if sh and sh.get("leader"):
+            leader = sh["leader"]
+        else:
+            leader = row["poc"]
+            stats["fallback_leader_from_poc"] += 1
 
         if email in seen_emails:
-            logger.debug("Duplicate email %s in 'Yes' list, skipping", email)
+            logger.debug("[%s] duplicate email %s, skipping", org_id, email)
             continue
         seen_emails.add(email)
 
@@ -226,15 +284,15 @@ def import_nominations(
             cycle_id=cycle_id,
             email=email,
             name=row["stakeholder"],
-            leader=row["poc"],
+            leader=leader,
             responded=(row["responded"] == "yes"),
-            responded_at="" if row["responded"] != "yes"
-            else datetime.now(timezone.utc).isoformat(),
+            responded_at=("" if row["responded"] != "yes"
+                          else datetime.now(timezone.utc).isoformat()),
         )
 
         if dry_run:
-            logger.debug("DRY RUN nomination: leader='%s' email=%s name='%s' responded=%s",
-                         nomination.leader, nomination.email, nomination.name, nomination.responded)
+            logger.debug("[%s] DRY RUN nomination: leader='%s' email=%s name='%s' responded=%s",
+                         org_id, nomination.leader, nomination.email, nomination.name, nomination.responded)
         else:
             nps_nomination_repo.put_nomination(nomination)
 
@@ -246,11 +304,11 @@ def import_nominations(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workbook", type=Path, required=True,
-                        help="Path to the Sandeep Directs workbook (.xlsx).")
-    parser.add_argument("--org", default="whs_cpt_in",
-                        help="org_id to import nominations under (default: whs_cpt_in).")
+                        help="Path to the team's stakeholder workbook (.xlsx).")
+    parser.add_argument("--org", required=True, choices=sorted(ORG_CONFIGS.keys()),
+                        help="org_id to import nominations under.")
     parser.add_argument("--cycle-id", default=DEFAULT_CYCLE_ID,
-                        help="cycle_id to attach nominations to (default: h1-2026-backfill).")
+                        help="cycle_id to attach nominations to (default: h1-2026).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Read-only — print stats, write nothing.")
     args = parser.parse_args()
@@ -261,7 +319,7 @@ def main() -> None:
     logger.info("=== Importing H1 2026 nominations (org=%s, cycle=%s, dry_run=%s) ===",
                 args.org, args.cycle_id, args.dry_run)
     stats = import_nominations(args.workbook, args.org, args.cycle_id, args.dry_run)
-    logger.info("Stats: %s", stats)
+    logger.info("[%s] Stats: %s", args.org, stats)
     if args.dry_run:
         logger.info("(DRY RUN — nothing was written)")
 
