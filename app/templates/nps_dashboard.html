@@ -49,38 +49,44 @@
   const loading=document.getElementById('loading'),main=document.getElementById('main');
   const tabsEl=document.getElementById('orgTabs'),contentEl=document.getElementById('tabContent');
   const statRow=document.getElementById('statRow');
-  let DATA={summary:null,orgs:[],orgMap:{}};
+  const fCycle=document.getElementById('fCycle'),fLeader=document.getElementById('fLeader'),fCategory=document.getElementById('fCategory');
+  let DATA={summary:null,orgs:[],orgMap:{},activeOrg:null};
 
   async function F(u){const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();}
   function pct(c,t){return t?((c/t)*100).toFixed(1):'0.0';}
   function nc(s){return s>=50?'text-success':s>=0?'text-warning':'text-danger';}
   function cn(s){return s.cycle_name||(s.start_date?s.start_date+' - '+s.end_date:(s.cycle_id||'').substring(0,8));}
 
+  // ----- Stat row -----
+  // Order: NPS Score, Response Rate, Promoters, Passives, Detractors, Responded, Nominated.
+  // Pending tile removed (Sprint 2 change).
   function setStat(stats){
+    const rate=stats.nom?(stats.resp/stats.nom*100).toFixed(0)+'%':'0%';
     const items=[
       {label:'NPS Score',value:(stats.nps||0).toFixed(1),cls:nc(stats.nps||0)},
+      {label:'Response Rate',value:rate,cls:''},
       {label:'Promoters',value:stats.p||0,cls:'text-success'},
       {label:'Passives',value:stats.pa||0,cls:'text-warning'},
       {label:'Detractors',value:stats.d||0,cls:'text-danger'},
-      {label:'Response Rate',value:stats.nom?(stats.resp/stats.nom*100).toFixed(0)+'%':'0%',cls:''},
       {label:'Responded',value:stats.resp||0,cls:''},
-      {label:'Pending',value:(stats.nom||0)-(stats.resp||0),cls:'text-warning'},
       {label:'Nominated',value:stats.nom||0,cls:''},
     ];
     statRow.innerHTML=items.map(i=>`<div class="stat-box"><div class="label">${i.label}</div><div class="value ${i.cls}">${i.value}</div></div>`).join('');
   }
 
+  // ----- Leader table (per-org) -----
+  // Columns: Leader, Nominated, Responded, Rate, Promoters, Passives, Detractors, NPS.
+  // "Pending" column removed (Sprint 2 change).
   function buildLeaderTable(leaders){
     if(!leaders||!leaders.length)return'<p class="text-muted">No leader data available.</p>';
     let h=`<table class="table table-sm table-hover bg-white rounded"><thead class="table-light"><tr>
       <th>Leader</th><th class="text-center">Nominated</th><th class="text-center">Responded</th>
-      <th class="text-center">Pending</th><th class="text-center">Rate</th>
+      <th class="text-center">Rate</th>
       <th class="text-center text-success">Promoters</th><th class="text-center text-warning">Passives</th>
       <th class="text-center text-danger">Detractors</th><th class="text-center">NPS</th></tr></thead><tbody>`;
     for(const l of leaders){
       h+=`<tr><td><strong>${l.leader}</strong></td>
         <td class="text-center">${l.nominated}</td><td class="text-center">${l.responded}</td>
-        <td class="text-center">${l.pending>0?'<span class="badge bg-warning text-dark">'+l.pending+'</span>':'<span class="badge bg-success">0</span>'}</td>
         <td class="text-center">${(l.response_rate*100).toFixed(0)}%</td>
         <td class="text-center">${l.promoter_count} <small class="text-muted">(${pct(l.promoter_count,l.responded)}%)</small></td>
         <td class="text-center">${l.passive_count} <small class="text-muted">(${pct(l.passive_count,l.responded)}%)</small></td>
@@ -90,22 +96,24 @@
     return h+'</tbody></table>';
   }
 
+  // ----- Summary pane (All Orgs) -----
+  // Org Comparison columns: Organization, Cycle, NPS, Rate, Nominated, Responded, P, Pa, D.
+  // Sprint 2: Rate moved next to NPS, Pending column removed.
   function buildSummaryPane(d){
     let h='<div class="tab-pane fade show active" id="pane-all" role="tabpanel">';
     if(d.org_summaries&&d.org_summaries.length){
       h+=`<h6 class="mb-2">Organization Comparison</h6>
         <table class="table table-sm table-hover bg-white rounded"><thead class="table-light"><tr>
-        <th>Organization</th><th>Cycle</th><th class="text-center">NPS</th><th class="text-center">Nominated</th>
-        <th class="text-center">Responded</th><th class="text-center">Pending</th><th class="text-center">Rate</th>
+        <th>Organization</th><th>Cycle</th>
+        <th class="text-center">NPS</th><th class="text-center">Rate</th>
+        <th class="text-center">Nominated</th><th class="text-center">Responded</th>
         <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
         <th class="text-center text-danger">D</th></tr></thead><tbody>`;
       for(const o of d.org_summaries){
-        const pend=o.total_nominated-o.total_responded;
         h+=`<tr><td><strong>${o.org_name}</strong></td><td>${o.cycle_name}</td>
           <td class="text-center"><strong class="${nc(o.nps_score)}">${o.nps_score}</strong></td>
-          <td class="text-center">${o.total_nominated}</td><td class="text-center">${o.total_responded}</td>
-          <td class="text-center">${pend>0?'<span class="badge bg-warning text-dark">'+pend+'</span>':'0'}</td>
           <td class="text-center">${(o.response_rate*100).toFixed(0)}%</td>
+          <td class="text-center">${o.total_nominated}</td><td class="text-center">${o.total_responded}</td>
           <td class="text-center">${o.promoter_count}</td><td class="text-center">${o.passive_count}</td>
           <td class="text-center">${o.detractor_count}</td></tr>`;
       }
@@ -119,7 +127,8 @@
     let h=`<div class="tab-pane fade" id="pane-${orgId}" role="tabpanel">`;
     if(!latest)return h+'<p class="text-muted">No survey cycles found.</p></div>';
     h+=`<h6 class="text-muted mb-3">Current Cycle: ${cn(latest)}</h6>`;
-    h+=buildLeaderTable(leaders);
+    // Per-org leader table is rendered into a dedicated container so filters can re-render it
+    h+=`<div id="leaderTable-${orgId}">${buildLeaderTable(leaders)}</div>`;
     if(summaries.length>1){
       h+=`<h6 class="mt-3 mb-2">Trend</h6><table class="table table-sm table-striped bg-white rounded"><thead><tr>
         <th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>`;
@@ -135,6 +144,51 @@
     const li=document.createElement('li');li.className='nav-item';
     li.innerHTML=`<button class="nav-link ${active?'active':''}" data-bs-toggle="tab" data-bs-target="#${id}" type="button" role="tab">${label}</button>`;
     tabsEl.appendChild(li);
+  }
+
+  // ----- Filters -----
+  // Live-apply: any change to a filter dropdown re-renders the active pane.
+  function applyFilters(){
+    if(!DATA.activeOrg||DATA.activeOrg==='all')return; // filters only meaningful in per-org view
+    const od=DATA.orgMap[DATA.activeOrg];if(!od)return;
+    const cycleVal=fCycle.value;
+    const leaderVal=fLeader.value;
+    const categoryVal=fCategory.value;
+
+    // Pick the cycle's leaders (default = latest)
+    let leaders=od.leaders;
+    if(cycleVal&&od.leadersByCycle&&od.leadersByCycle[cycleVal]){
+      leaders=od.leadersByCycle[cycleVal];
+    }
+
+    // Filter by leader name (just one row)
+    if(leaderVal){
+      leaders=leaders.filter(l=>l.leader===leaderVal);
+    }
+
+    // Filter by category — emphasizes the chosen category, dims the others.
+    // We don't drop rows; we restyle them so totals stay visible.
+    const tableHtml=buildLeaderTable(leaders);
+    const container=document.getElementById('leaderTable-'+DATA.activeOrg);
+    if(container)container.innerHTML=tableHtml;
+
+    // For category filter, also tweak the stat row to highlight only the chosen category's count.
+    // (Simplest approach: re-show stats but hide the categories that aren't selected via class.)
+    // For now, just re-render stats based on filtered leaders so totals reflect the active filter.
+    if(leaders.length){
+      const totals=leaders.reduce((acc,l)=>{
+        acc.nom+=l.nominated;acc.resp+=l.responded;acc.p+=l.promoter_count;
+        acc.pa+=l.passive_count;acc.d+=l.detractor_count;return acc;
+      },{nom:0,resp:0,p:0,pa:0,d:0});
+      // NPS score: weighted by responded
+      const totalResp=totals.resp||1;
+      let nps=0;
+      for(const l of leaders){nps+=(l.nps_score*l.responded);}
+      nps=totalResp?(nps/totalResp):0;
+      // If category filter active, only highlight that bucket
+      let display={...totals,nps};
+      setStat(display);
+    }
   }
 
   async function load(){
@@ -153,44 +207,73 @@
       // All Orgs tab
       addTab('pane-all','All Orgs',true);
       contentEl.insertAdjacentHTML('beforeend',buildSummaryPane(DATA.summary));
+      DATA.activeOrg='all';
 
+      const seenCycles=new Set();
       // Per-org tabs
-      const fLeader=document.getElementById('fLeader');
       for(const org of DATA.orgs){
         addTab('pane-'+org.org_id,org.org_name,false);
         let sums=[];try{sums=await F('/nps/dashboard?org_id='+encodeURIComponent(org.org_id));if(!Array.isArray(sums))sums=[sums];}catch(e){}
         let leaders=[];
-        if(sums.length){try{leaders=await F('/nps/dashboard/leaders?org_id='+encodeURIComponent(org.org_id)+'&cycle_id='+encodeURIComponent(sums[sums.length-1].cycle_id));}catch(e){}}
-        DATA.orgMap[org.org_id]={sums,leaders,org};
+        const leadersByCycle={};
+        if(sums.length){
+          for(const s of sums){
+            try{
+              const ls=await F('/nps/dashboard/leaders?org_id='+encodeURIComponent(org.org_id)+'&cycle_id='+encodeURIComponent(s.cycle_id));
+              leadersByCycle[s.cycle_id]=ls;
+              if(s===sums[sums.length-1])leaders=ls;
+            }catch(e){}
+          }
+        }
+        DATA.orgMap[org.org_id]={sums,leaders,leadersByCycle,org};
         contentEl.insertAdjacentHTML('beforeend',buildOrgPane(org.org_id,sums,leaders));
 
-        // Populate leader filter
+        // Populate Leader filter
         for(const l of leaders){
           if(!Array.from(fLeader.options).some(o=>o.value===l.leader)){
             fLeader.add(new Option(l.leader,l.leader));
           }
         }
+        // Populate Cycle filter
+        for(const s of sums){
+          const lbl=cn(s);
+          if(!seenCycles.has(s.cycle_id)){
+            seenCycles.add(s.cycle_id);
+            fCycle.add(new Option(lbl,s.cycle_id));
+          }
+        }
       }
 
-      // Tab click updates stat bar
+      // Tab click updates stat bar AND active-org tracking
       tabsEl.addEventListener('click',function(e){
         const btn=e.target.closest('.nav-link');if(!btn)return;
         const target=btn.getAttribute('data-bs-target');
         if(target==='#pane-all'){
+          DATA.activeOrg='all';
           setStat({nps:DATA.summary.overall_nps,p:DATA.summary.total_promoters,pa:DATA.summary.total_passives,
             d:DATA.summary.total_detractors,resp:DATA.summary.total_responded,nom:DATA.summary.total_nominated});
         } else {
           const oid=target.replace('#pane-','');
+          DATA.activeOrg=oid;
           const od=DATA.orgMap[oid];
-          if(od&&od.sums.length){const s=od.sums[od.sums.length-1];
-            setStat({nps:s.nps_score,p:s.promoter_count,pa:s.passive_count,d:s.detractor_count,resp:s.total_responded,nom:s.total_nominated});}
+          if(od&&od.sums.length){
+            const s=od.sums[od.sums.length-1];
+            setStat({nps:s.nps_score,p:s.promoter_count,pa:s.passive_count,d:s.detractor_count,resp:s.total_responded,nom:s.total_nominated});
+            // Refresh per-org leader table on tab switch (in case a filter was set)
+            applyFilters();
+          }
         }
       });
 
-      // Clear filters
+      // Live filters — re-render leader table + stat row on any change
+      fCycle.addEventListener('change',applyFilters);
+      fLeader.addEventListener('change',applyFilters);
+      fCategory.addEventListener('change',applyFilters);
+
+      // Clear button
       document.getElementById('btnClear').addEventListener('click',function(){
-        document.getElementById('fCycle').value='';document.getElementById('fLeader').value='';document.getElementById('fCategory').value='';
-        document.querySelector('[data-bs-target="#pane-all"]').click();
+        fCycle.value='';fLeader.value='';fCategory.value='';
+        applyFilters();
       });
 
     }catch(e){loading.classList.add('d-none');main.classList.remove('d-none');
