@@ -41,6 +41,24 @@
 <!-- Tab content -->
 <div class="tab-content" id="tabContent"></div>
 </div>
+
+<!-- Pending Stakeholders Modal (used for "View Pending" button) -->
+<div class="modal fade" id="pendingModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Pending Stakeholders</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="pendingModalBody"><div class="text-center"><div class="spinner-border text-success"></div></div></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -143,8 +161,9 @@
 
   // ----- Leader table (per-org) -----
   // Columns: Leader, Nominated, Responded, Rate, Promoters, Passives, Detractors, NPS.
-  // "Pending" column removed (Sprint 2 change).
-  function buildLeaderTable(leaders){
+  // "Pending" column removed (Sprint 2 change). Per-leader Remind link is
+  // appended to the Leader cell for any leader who has pending stakeholders.
+  function buildLeaderTable(leaders,orgId,cycleId){
     if(!leaders||!leaders.length)return'<p class="text-muted">No leader data available.</p>';
     let h=`<table class="table table-sm table-hover bg-white rounded"><thead class="table-light"><tr>
       <th>Leader</th><th class="text-center">Nominated</th><th class="text-center">Responded</th>
@@ -152,7 +171,11 @@
       <th class="text-center text-success">Promoters</th><th class="text-center text-warning">Passives</th>
       <th class="text-center text-danger">Detractors</th><th class="text-center">NPS</th></tr></thead><tbody>`;
     for(const l of leaders){
-      h+=`<tr><td><strong>${l.leader}</strong></td>
+      const pending=Math.max(0,(l.nominated||0)-(l.responded||0));
+      const remindLink=(pending>0&&orgId&&cycleId)
+        ? ` <a href="#" class="btn-remind-leader text-decoration-none small" data-org="${orgId}" data-cycle="${cycleId}" data-leader="${l.leader.replace(/"/g,'&quot;')}" data-pending="${pending}" title="Send reminder to ${pending} pending under ${l.leader}">✉️ Remind (${pending})</a>`
+        : '';
+      h+=`<tr><td><strong>${l.leader}</strong>${remindLink}</td>
         <td class="text-center">${l.nominated}</td><td class="text-center">${l.responded}</td>
         <td class="text-center">${(l.response_rate*100).toFixed(0)}%</td>
         <td class="text-center">${l.promoter_count} <small class="text-muted">(${pct(l.promoter_count,l.responded)}%)</small></td>
@@ -200,6 +223,10 @@
     h+=`<div class="d-flex justify-content-between align-items-center mb-3">
       <h6 class="text-muted m-0">Current Cycle: ${cn(latest)}</h6>
       <div>
+        <button class="btn btn-sm btn-outline-secondary me-2" id="btnViewPending-${orgId}"
+          data-org="${orgId}" data-cycle="${latest.cycle_id}">
+          View Pending (${pendingCount})
+        </button>
         <button class="btn btn-sm btn-outline-primary" id="btnRemind-${orgId}"
           data-org="${orgId}" data-cycle="${latest.cycle_id}" data-pending="${pendingCount}" ${reminderDisabled}>
           Send Reminder to Pending (${pendingCount})
@@ -208,7 +235,7 @@
     </div>`;
 
     // Per-org leader table is rendered into a dedicated container so filters can re-render it
-    h+=`<div id="leaderTable-${orgId}">${buildLeaderTable(leaders)}</div>`;
+    h+=`<div id="leaderTable-${orgId}">${buildLeaderTable(leaders,orgId,latest.cycle_id)}</div>`;
     if(summaries.length>1){
       h+=`<h6 class="mt-3 mb-2">Trend</h6><table class="table table-sm table-striped bg-white rounded"><thead><tr>
         <th>Cycle</th><th>NPS</th><th>P</th><th>Pa</th><th>D</th><th>Resp</th><th>Nom</th><th>Rate</th></tr></thead><tbody>`;
@@ -282,7 +309,9 @@
     }
 
     // Re-render leader table
-    const tableHtml=buildLeaderTable(leaders);
+    const od2=DATA.orgMap[DATA.activeOrg];
+    const activeCycleId=cycleVal||(od2&&od2.sums.length?od2.sums[od2.sums.length-1].cycle_id:'');
+    const tableHtml=buildLeaderTable(leaders,DATA.activeOrg,activeCycleId);
     const container=document.getElementById('leaderTable-'+DATA.activeOrg);
     if(container)container.innerHTML=tableHtml;
 
@@ -320,6 +349,148 @@
   function isHistoricalPeriod(value){
     // Historical period labels look like "2024 H1", "2025 H2", etc.
     return /^\d{4}\s*H[12]$/i.test(value||'');
+  }
+
+  // ----- Reminder handlers (bulk / per-leader / per-stakeholder) -----
+
+  function _summarizeReminderResult(data){
+    const failed=data.failed_count||0;
+    return (
+      `Reminder dispatched.\n` +
+      `Email sent: ${data.email_sent_count||0}\n` +
+      `Slack sent: ${data.slack_sent_count||0}\n` +
+      `Failed: ${failed}` +
+      (failed>0?'\n\nCheck delivery failure log for details.':'')
+    );
+  }
+
+  async function handleBulkRemind(btn){
+    const orgId=btn.dataset.org;
+    const cycleId=btn.dataset.cycle;
+    const pending=parseInt(btn.dataset.pending||'0',10);
+    if(pending<=0){
+      alert('No pending stakeholders for this cycle.');
+      return;
+    }
+    if(!window.confirm(
+      `Send reminder to ${pending} pending stakeholder${pending===1?'':'s'} in ${orgId}?\n\n` +
+      `This will dispatch real emails (and Slack DMs if configured). Continue?`
+    ))return;
+    const original=btn.textContent;
+    btn.disabled=true;btn.textContent='Sending...';
+    try{
+      const resp=await fetch('/nps/remind',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({org_id:orgId,cycle_id:cycleId}),
+      });
+      const data=await resp.json();
+      alert(resp.ok?_summarizeReminderResult(data):('Reminder failed: '+(data.error||resp.status)));
+    }catch(err){alert('Reminder failed: '+err.message);}
+    finally{btn.disabled=false;btn.textContent=original;}
+  }
+
+  async function handlePerLeaderRemind(link){
+    const orgId=link.dataset.org;
+    const cycleId=link.dataset.cycle;
+    const leader=link.dataset.leader;
+    const pending=parseInt(link.dataset.pending||'0',10);
+    if(pending<=0){
+      alert('No pending stakeholders under this leader.');
+      return;
+    }
+    if(!window.confirm(
+      `Send reminder to ${pending} pending stakeholder${pending===1?'':'s'} under ${leader} in ${orgId}?\n\n` +
+      `This will dispatch real emails (and Slack DMs if configured). Continue?`
+    ))return;
+    // Resolve the actual emails for this leader from /nps/pending?leader=...
+    try{
+      const listResp=await fetch(`/nps/pending?org_id=${encodeURIComponent(orgId)}&cycle_id=${encodeURIComponent(cycleId)}&leader=${encodeURIComponent(leader)}`);
+      if(!listResp.ok){alert('Could not load pending list: '+listResp.status);return;}
+      const list=await listResp.json();
+      const emails=list.map(x=>x.email).filter(Boolean);
+      if(!emails.length){alert('No pending recipients found for '+leader+'.');return;}
+      const original=link.textContent;
+      link.textContent='Sending...';
+      const resp=await fetch('/nps/remind/targeted',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({org_id:orgId,cycle_id:cycleId,emails:emails}),
+      });
+      const data=await resp.json();
+      alert(resp.ok?_summarizeReminderResult(data):('Reminder failed: '+(data.error||resp.status)));
+      link.textContent=original;
+    }catch(err){alert('Reminder failed: '+err.message);}
+  }
+
+  async function openPendingModal(orgId,cycleId){
+    const body=document.getElementById('pendingModalBody');
+    body.innerHTML='<div class="text-center"><div class="spinner-border text-success"></div></div>';
+    // Show the modal up front; we'll fill it in once the fetch returns.
+    const modal=new bootstrap.Modal(document.getElementById('pendingModal'));
+    modal.show();
+    try{
+      const resp=await fetch(`/nps/pending?org_id=${encodeURIComponent(orgId)}&cycle_id=${encodeURIComponent(cycleId)}`);
+      if(!resp.ok){body.innerHTML='<div class="alert alert-danger">Failed to load: '+resp.status+'</div>';return;}
+      const list=await resp.json();
+      if(!list.length){body.innerHTML='<p class="text-muted m-0">No pending stakeholders. 🎉</p>';return;}
+      let h=`<p class="text-muted">${list.length} pending stakeholder${list.length===1?'':'s'} for this cycle. Click <em>Send</em> to remind them individually.</p>
+        <table class="table table-sm table-hover">
+        <thead class="table-light"><tr>
+        <th>Name</th><th>Email</th><th>Leader</th><th class="text-end"></th></tr></thead><tbody>`;
+      for(const n of list){
+        const email=String(n.email||'').replace(/"/g,'&quot;');
+        const safeName=(n.name||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+        const safeLeader=(n.leader||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+        h+=`<tr>
+          <td>${safeName||'<em class="text-muted">unnamed</em>'}</td>
+          <td><code>${email}</code></td>
+          <td>${safeLeader||'<em class="text-muted">unassigned</em>'}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-primary btn-remind-individual"
+              data-org="${orgId}" data-cycle="${cycleId}" data-email="${email}" data-name="${safeName}">
+              Send
+            </button>
+          </td>
+        </tr>`;
+      }
+      h+='</tbody></table>';
+      body.innerHTML=h;
+    }catch(err){
+      body.innerHTML='<div class="alert alert-danger">Error: '+err.message+'</div>';
+    }
+  }
+
+  async function handleIndividualRemind(btn){
+    const orgId=btn.dataset.org;
+    const cycleId=btn.dataset.cycle;
+    const email=btn.dataset.email;
+    const name=btn.dataset.name||email;
+    if(!window.confirm(
+      `Send a reminder to ${name} (${email}) in ${orgId}?\n\n` +
+      `This will dispatch a real email (and Slack DM if configured). Continue?`
+    ))return;
+    const original=btn.textContent;
+    btn.disabled=true;btn.textContent='Sending...';
+    try{
+      const resp=await fetch('/nps/remind/targeted',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({org_id:orgId,cycle_id:cycleId,emails:[email]}),
+      });
+      const data=await resp.json();
+      if(resp.ok){
+        btn.textContent='Sent ✓';
+        btn.classList.remove('btn-outline-primary');
+        btn.classList.add('btn-success');
+      } else {
+        alert('Reminder failed: '+(data.error||resp.status));
+        btn.disabled=false;btn.textContent=original;
+      }
+    }catch(err){
+      alert('Reminder failed: '+err.message);
+      btn.disabled=false;btn.textContent=original;
+    }
   }
 
   async function load(){
@@ -415,52 +586,36 @@
       fLeader.addEventListener('change',applyFilters);
       fCategory.addEventListener('change',applyFilters);
 
-      // Reminder button — delegated handler so it works across all org panes
+      // Reminder + pending-list buttons — delegated handler covers all org panes
       contentEl.addEventListener('click',async function(e){
-        const btn=e.target.closest('[id^="btnRemind-"]');
-        if(!btn)return;
-        const orgId=btn.dataset.org;
-        const cycleId=btn.dataset.cycle;
-        const pending=parseInt(btn.dataset.pending||'0',10);
-        if(pending<=0){
-          alert('No pending stakeholders for this cycle.');
+        // Bulk remind ("Send Reminder to Pending (N)")
+        const bulk=e.target.closest('[id^="btnRemind-"]');
+        if(bulk){
+          await handleBulkRemind(bulk);
           return;
         }
-        const ok=window.confirm(
-          `Send reminder to ${pending} pending stakeholder${pending===1?'':'s'} in ${orgId}?\n\n` +
-          `This will dispatch real emails (and Slack DMs if configured). Continue?`
-        );
-        if(!ok)return;
-
-        const originalLabel=btn.textContent;
-        btn.disabled=true;
-        btn.textContent='Sending...';
-        try{
-          const resp=await fetch('/nps/remind',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({org_id:orgId,cycle_id:cycleId}),
-          });
-          const data=await resp.json();
-          if(!resp.ok){
-            alert('Reminder failed: ' + (data.error||resp.status));
-          } else {
-            const sent=(data.email_sent_count||0)+(data.slack_sent_count||0);
-            const failed=data.failed_count||0;
-            alert(
-              `Reminder dispatched.\n` +
-              `Email sent: ${data.email_sent_count||0}\n` +
-              `Slack sent: ${data.slack_sent_count||0}\n` +
-              `Failed: ${failed}` +
-              (failed>0?'\n\nCheck delivery failure log for details.':'')
-            );
-          }
-        }catch(err){
-          alert('Reminder failed: ' + err.message);
-        }finally{
-          btn.disabled=false;
-          btn.textContent=originalLabel;
+        // Per-leader remind link in the leader table
+        const perLeader=e.target.closest('.btn-remind-leader');
+        if(perLeader){
+          e.preventDefault();
+          await handlePerLeaderRemind(perLeader);
+          return;
         }
+        // "View Pending" — open modal with individual stakeholder rows
+        const viewPending=e.target.closest('[id^="btnViewPending-"]');
+        if(viewPending){
+          await openPendingModal(viewPending.dataset.org, viewPending.dataset.cycle);
+          return;
+        }
+      });
+
+      // Modal-internal individual-send buttons (delegated)
+      const pendingModalBody=document.getElementById('pendingModalBody');
+      pendingModalBody.addEventListener('click',async function(e){
+        const btn=e.target.closest('.btn-remind-individual');
+        if(!btn)return;
+        e.preventDefault();
+        await handleIndividualRemind(btn);
       });
 
       // Clear button

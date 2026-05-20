@@ -358,6 +358,80 @@ def send_reminder():
         return jsonify({"error": str(exc)}), 500
 
 
+@nps_bp.route("/remind/targeted", methods=["POST"])
+@role_required("admin", "editor")
+def send_targeted_reminder():
+    """Send a reminder to a caller-supplied list of stakeholder emails.
+
+    Body JSON:
+        org_id (str): required
+        cycle_id (str): required
+        emails (list[str]): required — emails to remind. Any that aren't
+            current non-respondents for this org+cycle are silently dropped.
+
+    Returns:
+        ReminderResult-shaped dict on success.
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        cycle_id = data.get("cycle_id", "")
+        emails = data.get("emails") or []
+        if not org_id or not cycle_id:
+            return jsonify({"error": "org_id and cycle_id are required"}), 400
+        if not isinstance(emails, list) or not emails:
+            return jsonify({"error": "emails (non-empty list) is required"}), 400
+
+        from_addr = os.environ.get("NPS_FROM_ADDRESS", "")
+        if not from_addr or "example.com" in from_addr.lower():
+            return jsonify({
+                "error": (
+                    "NPS_FROM_ADDRESS is not configured (or is the example.com "
+                    "placeholder). Set it to a verified SES sender."
+                )
+            }), 503
+
+        result = nps_distribution_service.send_targeted_reminder(
+            org_id, cycle_id, emails, trigger_type="manual",
+        )
+        return jsonify(vars(result))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error sending targeted reminder")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/pending", methods=["GET"])
+@login_required
+def list_pending_stakeholders():
+    """List non-respondent stakeholders for an org+cycle.
+
+    Query params:
+        org_id (str): required
+        cycle_id (str): required
+        leader (str): optional — filter to one leader's pending stakeholders
+
+    Returns:
+        List of {email, name, leader} dicts.
+    """
+    org_id = request.args.get("org_id", "")
+    cycle_id = request.args.get("cycle_id", "")
+    leader_filter = request.args.get("leader", "").strip()
+
+    if not org_id or not cycle_id:
+        return jsonify({"error": "org_id and cycle_id are required"}), 400
+
+    pending = nps_nomination_service.get_reminder_list(org_id, cycle_id)
+    if leader_filter:
+        pending = [n for n in pending if (n.leader or "") == leader_filter]
+
+    return jsonify([
+        {"email": n.email, "name": n.name, "leader": n.leader or ""}
+        for n in pending
+    ])
+
+
 # ---------------------------------------------------------------------------
 # Manual response recording
 # ---------------------------------------------------------------------------

@@ -297,3 +297,147 @@ def send_reminder(
     )
 
     return result
+
+
+def send_targeted_reminder(
+    org_id: str,
+    cycle_id: str,
+    emails: list[str],
+    trigger_type: str = "manual",
+) -> ReminderResult:
+    """Send a reminder to a specific list of stakeholder emails.
+
+    Used for per-leader and per-stakeholder reminder buttons. Filters the
+    org's non-respondent list to those whose email matches the supplied
+    list; this avoids reminders going to anyone who has already responded
+    or who isn't on the cycle.
+
+    Args:
+        org_id: Organization identifier.
+        cycle_id: Survey cycle identifier.
+        emails: Explicit list of stakeholder emails to remind. Anything
+            in this list that ISN'T a current non-respondent for this
+            org+cycle is silently dropped.
+        trigger_type: 'automated' or 'manual'.
+
+    Returns:
+        ReminderResult with per-channel counts and failures.
+
+    Raises:
+        ValueError: If org config or cycle is not found.
+    """
+    org = nps_org_config_service.get_org(org_id)
+    if org is None:
+        raise ValueError(f"Org '{org_id}' not found")
+
+    cycle = nps_cycle_repo.get_cycle(org_id, cycle_id)
+    if cycle is None:
+        raise ValueError(f"Cycle '{cycle_id}' not found for org '{org_id}'")
+
+    if not emails:
+        return ReminderResult()
+
+    target_set = {e.strip().lower() for e in emails if e and e.strip()}
+    all_pending = nps_nomination_service.get_reminder_list(org_id, cycle_id)
+    targets = [n for n in all_pending if n.email.lower() in target_set]
+    if not targets:
+        return ReminderResult()
+
+    channels = org.reminder_channels or ["email"]
+    result = ReminderResult(channels_used=list(channels))
+    failed_count = 0
+    from_address = os.environ.get("NPS_FROM_ADDRESS", "nps-survey@example.com")
+    form_url = org.asana_form_url
+
+    # --- Email channel ---
+    if "email" in channels:
+        bcc = [n.email for n in targets]
+        body = _build_reminder_body(form_url)
+        email_result = email_client.send_bcc_email(
+            subject=_REMINDER_SUBJECT,
+            body=body,
+            bcc_recipients=bcc,
+            from_address=from_address,
+        )
+        if email_result.ok:
+            result.email_sent_count = len(bcc)
+        else:
+            for addr in bcc:
+                _log_failure(
+                    org_id=org_id,
+                    cycle_id=cycle_id,
+                    email=addr,
+                    error_reason=email_result.error or "Unknown email error",
+                    event_type="reminder",
+                    channel="email",
+                )
+            failed_count += len(bcc)
+
+    # --- Slack channel ---
+    if "slack" in channels:
+        slack_message = _build_slack_reminder_message(form_url)
+        bot_token = org.slack_bot_token
+        if not bot_token:
+            logger.warning(
+                "Slack channel enabled for org '%s' but no slack_bot_token configured. "
+                "Skipping Slack targeted reminders.",
+                org_id,
+            )
+        else:
+            for nom in targets:
+                slack_user_id = nom.slack_user_id
+                if not slack_user_id:
+                    try:
+                        slack_user_id = slack_client.lookup_user_by_email(nom.email, bot_token)
+                        nps_nomination_repo.update_nomination(
+                            org_id, cycle_id, nom.email,
+                            slack_user_id=slack_user_id,
+                        )
+                    except SlackUserNotFoundError:
+                        _log_failure(
+                            org_id=org_id, cycle_id=cycle_id, email=nom.email,
+                            error_reason=f"Slack user not found for email: {nom.email}",
+                            event_type="reminder", channel="slack",
+                        )
+                        failed_count += 1
+                        continue
+                    except RuntimeError as exc:
+                        _log_failure(
+                            org_id=org_id, cycle_id=cycle_id, email=nom.email,
+                            error_reason=str(exc),
+                            event_type="reminder", channel="slack",
+                        )
+                        failed_count += 1
+                        continue
+
+                dm_result = slack_client.send_dm(slack_user_id, slack_message, bot_token)
+                if dm_result.ok:
+                    result.slack_sent_count += 1
+                else:
+                    _log_failure(
+                        org_id=org_id, cycle_id=cycle_id, email=nom.email,
+                        error_reason=dm_result.error or "Unknown Slack error",
+                        event_type="reminder", channel="slack",
+                    )
+                    failed_count += 1
+
+    result.failed_count = failed_count
+
+    # Log reminder event
+    reminder_log = ReminderLog(
+        org_id=org_id,
+        cycle_id=cycle_id,
+        log_id=str(uuid.uuid4()),
+        sent_at=datetime.now(timezone.utc).isoformat(),
+        trigger_type=trigger_type,
+        recipient_count=result.email_sent_count + result.slack_sent_count,
+        channels=list(channels),
+    )
+    nps_reminder_log_repo.put_log(reminder_log)
+
+    nps_cycle_repo.update_cycle(
+        org_id, cycle_id,
+        last_reminder_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    return result
