@@ -212,13 +212,17 @@
     return h+'</div>';
   }
 
-  function buildOrgPane(orgId,summaries,leaders){
+  function buildOrgPane(orgId,summaries,leaders,pendingCount){
     const latest=summaries.length?summaries[summaries.length-1]:null;
     let h=`<div class="tab-pane fade" id="pane-${orgId}" role="tabpanel">`;
     if(!latest)return h+'<p class="text-muted">No survey cycles found.</p></div>';
 
     // Header row: cycle label on the left, action buttons on the right.
-    const pendingCount=leaders.reduce((acc,l)=>acc+Math.max(0,l.nominated-l.responded),0);
+    // pendingCount is the authoritative number from /nps/pending (matches the
+    // modal). Falls back to leader-sum if the fetch failed.
+    if(pendingCount===undefined||pendingCount===null){
+      pendingCount=leaders.reduce((acc,l)=>acc+Math.max(0,l.nominated-l.responded),0);
+    }
     const reminderDisabled=pendingCount<=0?'disabled':'';
     h+=`<div class="d-flex justify-content-between align-items-center mb-3">
       <h6 class="text-muted m-0">Current Cycle: ${cn(latest)}</h6>
@@ -394,24 +398,31 @@
     const orgId=link.dataset.org;
     const cycleId=link.dataset.cycle;
     const leader=link.dataset.leader;
-    const pending=parseInt(link.dataset.pending||'0',10);
-    if(pending<=0){
-      alert('No pending stakeholders under this leader.');
-      return;
-    }
-    if(!window.confirm(
-      `Send reminder to ${pending} pending stakeholder${pending===1?'':'s'} under ${leader} in ${orgId}?\n\n` +
-      `This will dispatch real emails (and Slack DMs if configured). Continue?`
-    ))return;
     // Resolve the actual emails for this leader from /nps/pending?leader=...
+    // Don't trust the leader-table 'pending' count — it can drift when a
+    // respondent picks a different leader on the form than their nomination's
+    // leader. The /nps/pending endpoint is the source of truth.
+    let recipients=[];
     try{
       const listResp=await fetch(`/nps/pending?org_id=${encodeURIComponent(orgId)}&cycle_id=${encodeURIComponent(cycleId)}&leader=${encodeURIComponent(leader)}`);
       if(!listResp.ok){alert('Could not load pending list: '+listResp.status);return;}
-      const list=await listResp.json();
-      const emails=list.map(x=>x.email).filter(Boolean);
-      if(!emails.length){alert('No pending recipients found for '+leader+'.');return;}
-      const original=link.textContent;
-      link.textContent='Sending...';
+      recipients=await listResp.json();
+    }catch(err){alert('Could not load pending list: '+err.message);return;}
+
+    if(!recipients.length){
+      alert('No pending stakeholders under '+leader+'.');
+      return;
+    }
+    const emails=recipients.map(x=>x.email).filter(Boolean);
+    const actualCount=emails.length;
+    if(!window.confirm(
+      `Send reminder to ${actualCount} pending stakeholder${actualCount===1?'':'s'} under ${leader} in ${orgId}?\n\n` +
+      `This will dispatch real emails (and Slack DMs if configured). Continue?`
+    ))return;
+
+    const original=link.textContent;
+    link.textContent='Sending...';
+    try{
       const resp=await fetch('/nps/remind/targeted',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -419,8 +430,8 @@
       });
       const data=await resp.json();
       alert(resp.ok?_summarizeReminderResult(data):('Reminder failed: '+(data.error||resp.status)));
-      link.textContent=original;
     }catch(err){alert('Reminder failed: '+err.message);}
+    finally{link.textContent=original;}
   }
 
   async function openPendingModal(orgId,cycleId){
@@ -527,8 +538,22 @@
             }catch(e){}
           }
         }
-        DATA.orgMap[org.org_id]={sums,leaders,leadersByCycle,org};
-        contentEl.insertAdjacentHTML('beforeend',buildOrgPane(org.org_id,sums,leaders));
+        // Fetch the *real* pending list (responded=False) so the header button
+        // shows a count consistent with the modal. The leader breakdown's
+        // pending sum can drift when respondents pick a different leader on
+        // the Asana form than the workbook says owns them.
+        let pendingCount=0;
+        if(sums.length){
+          try{
+            const pendingResp=await fetch(`/nps/pending?org_id=${encodeURIComponent(org.org_id)}&cycle_id=${encodeURIComponent(sums[sums.length-1].cycle_id)}`);
+            if(pendingResp.ok){
+              const list=await pendingResp.json();
+              pendingCount=list.length;
+            }
+          }catch(_){}
+        }
+        DATA.orgMap[org.org_id]={sums,leaders,leadersByCycle,org,pendingCount};
+        contentEl.insertAdjacentHTML('beforeend',buildOrgPane(org.org_id,sums,leaders,pendingCount));
 
         // Populate Cycle filter (cycles are global across orgs)
         for(const s of sums){
