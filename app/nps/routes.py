@@ -336,6 +336,19 @@ def send_reminder():
         cycle_id = data.get("cycle_id", "")
         if not all([org_id, cycle_id]):
             return jsonify({"error": "org_id and cycle_id are required"}), 400
+
+        # Guardrail: refuse if the sender is the placeholder default. SES would
+        # reject it anyway; this gives a clearer error to the operator.
+        from_addr = os.environ.get("NPS_FROM_ADDRESS", "")
+        if not from_addr or "example.com" in from_addr.lower():
+            return jsonify({
+                "error": (
+                    "NPS_FROM_ADDRESS is not configured (or is the example.com "
+                    "placeholder). Set it to a verified SES sender on the EC2 "
+                    "service unit before sending real reminders."
+                )
+            }), 503
+
         result = nps_distribution_service.send_reminder(org_id, cycle_id, trigger_type="manual")
         return jsonify(vars(result))
     except ValueError as exc:

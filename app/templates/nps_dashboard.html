@@ -193,7 +193,20 @@
     const latest=summaries.length?summaries[summaries.length-1]:null;
     let h=`<div class="tab-pane fade" id="pane-${orgId}" role="tabpanel">`;
     if(!latest)return h+'<p class="text-muted">No survey cycles found.</p></div>';
-    h+=`<h6 class="text-muted mb-3">Current Cycle: ${cn(latest)}</h6>`;
+
+    // Header row: cycle label on the left, action buttons on the right.
+    const pendingCount=leaders.reduce((acc,l)=>acc+Math.max(0,l.nominated-l.responded),0);
+    const reminderDisabled=pendingCount<=0?'disabled':'';
+    h+=`<div class="d-flex justify-content-between align-items-center mb-3">
+      <h6 class="text-muted m-0">Current Cycle: ${cn(latest)}</h6>
+      <div>
+        <button class="btn btn-sm btn-outline-primary" id="btnRemind-${orgId}"
+          data-org="${orgId}" data-cycle="${latest.cycle_id}" data-pending="${pendingCount}" ${reminderDisabled}>
+          Send Reminder to Pending (${pendingCount})
+        </button>
+      </div>
+    </div>`;
+
     // Per-org leader table is rendered into a dedicated container so filters can re-render it
     h+=`<div id="leaderTable-${orgId}">${buildLeaderTable(leaders)}</div>`;
     if(summaries.length>1){
@@ -401,6 +414,54 @@
       fCycle.addEventListener('change',applyFilters);
       fLeader.addEventListener('change',applyFilters);
       fCategory.addEventListener('change',applyFilters);
+
+      // Reminder button — delegated handler so it works across all org panes
+      contentEl.addEventListener('click',async function(e){
+        const btn=e.target.closest('[id^="btnRemind-"]');
+        if(!btn)return;
+        const orgId=btn.dataset.org;
+        const cycleId=btn.dataset.cycle;
+        const pending=parseInt(btn.dataset.pending||'0',10);
+        if(pending<=0){
+          alert('No pending stakeholders for this cycle.');
+          return;
+        }
+        const ok=window.confirm(
+          `Send reminder to ${pending} pending stakeholder${pending===1?'':'s'} in ${orgId}?\n\n` +
+          `This will dispatch real emails (and Slack DMs if configured). Continue?`
+        );
+        if(!ok)return;
+
+        const originalLabel=btn.textContent;
+        btn.disabled=true;
+        btn.textContent='Sending...';
+        try{
+          const resp=await fetch('/nps/remind',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({org_id:orgId,cycle_id:cycleId}),
+          });
+          const data=await resp.json();
+          if(!resp.ok){
+            alert('Reminder failed: ' + (data.error||resp.status));
+          } else {
+            const sent=(data.email_sent_count||0)+(data.slack_sent_count||0);
+            const failed=data.failed_count||0;
+            alert(
+              `Reminder dispatched.\n` +
+              `Email sent: ${data.email_sent_count||0}\n` +
+              `Slack sent: ${data.slack_sent_count||0}\n` +
+              `Failed: ${failed}` +
+              (failed>0?'\n\nCheck delivery failure log for details.':'')
+            );
+          }
+        }catch(err){
+          alert('Reminder failed: ' + err.message);
+        }finally{
+          btn.disabled=false;
+          btn.textContent=originalLabel;
+        }
+      });
 
       // Clear button
       document.getElementById('btnClear').addEventListener('click',function(){
