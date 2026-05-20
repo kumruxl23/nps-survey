@@ -148,12 +148,41 @@
 
   // ----- Filters -----
   // Live-apply: any change to a filter dropdown re-renders the active pane.
+  // Leader dropdown is repopulated on tab switch — only leaders for the
+  // active org are shown (or all leaders on the "All Orgs" tab).
+  function refreshLeaderDropdown(){
+    const previousValue=fLeader.value;
+    fLeader.innerHTML='<option value="">All Leaders</option>';
+    let leaders=[];
+    if(DATA.activeOrg==='all'){
+      // Union of leaders across all orgs
+      const seen=new Set();
+      for(const oid of Object.keys(DATA.orgMap)){
+        for(const l of (DATA.orgMap[oid].leaders||[])){
+          if(!seen.has(l.leader)){seen.add(l.leader);leaders.push(l.leader);}
+        }
+      }
+    } else {
+      const od=DATA.orgMap[DATA.activeOrg];
+      if(od)leaders=(od.leaders||[]).map(l=>l.leader);
+    }
+    leaders.sort();
+    for(const name of leaders){
+      fLeader.add(new Option(name,name));
+    }
+    // Restore previous selection if still valid; otherwise reset
+    if(previousValue&&leaders.includes(previousValue)){
+      fLeader.value=previousValue;
+    } else {
+      fLeader.value='';
+    }
+  }
+
   function applyFilters(){
     if(!DATA.activeOrg||DATA.activeOrg==='all')return; // filters only meaningful in per-org view
     const od=DATA.orgMap[DATA.activeOrg];if(!od)return;
     const cycleVal=fCycle.value;
     const leaderVal=fLeader.value;
-    const categoryVal=fCategory.value;
 
     // Pick the cycle's leaders (default = latest)
     let leaders=od.leaders;
@@ -228,13 +257,7 @@
         DATA.orgMap[org.org_id]={sums,leaders,leadersByCycle,org};
         contentEl.insertAdjacentHTML('beforeend',buildOrgPane(org.org_id,sums,leaders));
 
-        // Populate Leader filter
-        for(const l of leaders){
-          if(!Array.from(fLeader.options).some(o=>o.value===l.leader)){
-            fLeader.add(new Option(l.leader,l.leader));
-          }
-        }
-        // Populate Cycle filter
+        // Populate Cycle filter (cycles are global across orgs)
         for(const s of sums){
           const lbl=cn(s);
           if(!seenCycles.has(s.cycle_id)){
@@ -244,6 +267,9 @@
         }
       }
 
+      // Initial Leader dropdown — show union (we're on All Orgs tab to start)
+      refreshLeaderDropdown();
+
       // Tab click updates stat bar AND active-org tracking
       tabsEl.addEventListener('click',function(e){
         const btn=e.target.closest('.nav-link');if(!btn)return;
@@ -252,6 +278,7 @@
           DATA.activeOrg='all';
           setStat({nps:DATA.summary.overall_nps,p:DATA.summary.total_promoters,pa:DATA.summary.total_passives,
             d:DATA.summary.total_detractors,resp:DATA.summary.total_responded,nom:DATA.summary.total_nominated});
+          refreshLeaderDropdown();
         } else {
           const oid=target.replace('#pane-','');
           DATA.activeOrg=oid;
@@ -259,6 +286,7 @@
           if(od&&od.sums.length){
             const s=od.sums[od.sums.length-1];
             setStat({nps:s.nps_score,p:s.promoter_count,pa:s.passive_count,d:s.detractor_count,resp:s.total_responded,nom:s.total_nominated});
+            refreshLeaderDropdown();
             // Refresh per-org leader table on tab switch (in case a filter was set)
             applyFilters();
           }
