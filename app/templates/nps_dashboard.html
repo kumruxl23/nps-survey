@@ -57,6 +57,73 @@
   function nc(s){return s>=50?'text-success':s>=0?'text-warning':'text-danger';}
   function cn(s){return s.cycle_name||(s.start_date?s.start_date+' - '+s.end_date:(s.cycle_id||'').substring(0,8));}
 
+  // ----- Historical Data (hardcoded, source TBD) -----
+  // Covers H1 2024 through H2 2025. Live H1 2026 data comes from DynamoDB
+  // and is shown elsewhere (top stats + leader table). Numbers from team
+  // workbook screenshots; replace with workbook-driven import when ready.
+  const HISTORICAL_DATA={
+    whs_cpt_in:{
+      label:'CPT-IN',
+      rows:[
+        {period:'2024 H1',nominated:112,responded:60, detractor:1,passive:5, promoter:54, rr:53.57,nps:88.33},
+        {period:'2024 H2',nominated:137,responded:122,detractor:2,passive:17,promoter:103,rr:89.05,nps:82.79},
+        {period:'2025 H1',nominated:91, responded:82, detractor:1,passive:10,promoter:71, rr:90.11,nps:85.37},
+        {period:'2025 H2',nominated:112,responded:98, detractor:1,passive:17,promoter:80, rr:87.50,nps:80.61},
+      ],
+    },
+    whs_cpt_na:{
+      label:'CPT-NA',
+      rows:[
+        {period:'2024 H1',nominated:99,responded:7, detractor:0,passive:1,promoter:6, rr:7.07, nps:85.71},
+        {period:'2024 H2',nominated:88,responded:62,detractor:1,passive:8,promoter:53,rr:70.45,nps:83.87},
+        {period:'2025 H1',nominated:67,responded:64,detractor:1,passive:8,promoter:55,rr:95.52,nps:84.38},
+        {period:'2025 H2',nominated:43,responded:42,detractor:0,passive:8,promoter:34,rr:97.67,nps:80.95},
+      ],
+    },
+    fec:{
+      label:'FEC',
+      rows:[
+        {period:'2024 H1',nominated:227,responded:80,detractor:4,passive:19,promoter:57,rr:35.24,nps:66.25},
+        {period:'2024 H2',nominated:165,responded:86,detractor:9,passive:24,promoter:53,rr:52.12,nps:51.16},
+        {period:'2025 H1',nominated:79, responded:64,detractor:4,passive:21,promoter:39,rr:81.01,nps:54.69},
+        {period:'2025 H2',nominated:51, responded:32,detractor:1,passive:10,promoter:21,rr:62.75,nps:62.50},
+      ],
+    },
+  };
+
+  function buildHistoricalTable(orgId,filterPeriod){
+    const data=HISTORICAL_DATA[orgId];
+    if(!data)return'';
+    let rows=data.rows.slice();
+    if(filterPeriod)rows=rows.filter(r=>r.period===filterPeriod);
+
+    if(!rows.length){
+      return `<div class="card mt-4"><div class="card-header bg-light"><strong>NPS Historical Data — ${data.label}</strong></div>
+        <div class="card-body text-muted">No data for selected period.</div></div>`;
+    }
+
+    const range=`${rows[0].period} - ${rows[rows.length-1].period}`;
+    let h=`<div class="card mt-4"><div class="card-header bg-light">
+      <strong>NPS Historical Data — ${data.label}</strong>
+      <span class="text-muted ms-2">(${range})</span></div>
+      <div class="card-body p-0"><table class="table table-sm mb-0">
+      <thead class="table-light"><tr>
+      <th>Period</th><th class="text-center">Total Nominated</th><th class="text-center">Total response receive</th>
+      <th class="text-center text-danger">Detractor</th><th class="text-center text-warning">Passive</th>
+      <th class="text-center text-success">Promoter</th><th class="text-center">RR%</th>
+      <th class="text-center">NPS</th></tr></thead><tbody>`;
+    for(const r of rows){
+      h+=`<tr><td><strong>${r.period}</strong></td>
+        <td class="text-center">${r.nominated}</td><td class="text-center">${r.responded}</td>
+        <td class="text-center text-danger">${r.detractor}</td>
+        <td class="text-center text-warning">${r.passive}</td>
+        <td class="text-center text-success">${r.promoter}</td>
+        <td class="text-center">${r.rr.toFixed(2)}%</td>
+        <td class="text-center"><strong class="${nc(r.nps)}">${r.nps.toFixed(2)}</strong></td></tr>`;
+    }
+    return h+'</tbody></table></div></div>';
+  }
+
   // ----- Stat row -----
   // Order: NPS Score, Response Rate, Promoters, Passives, Detractors, Responded, Nominated.
   // Pending tile removed (Sprint 2 change).
@@ -137,6 +204,8 @@
         <td>${s.total_responded}</td><td>${s.total_nominated}</td><td>${(s.response_rate*100).toFixed(1)}%</td></tr>`;
       h+='</tbody></table>';
     }
+    // Historical data table (hardcoded for now, filterable via the Cycle dropdown's period values)
+    h+=`<div id="historicalTable-${orgId}">${buildHistoricalTable(orgId,'')}</div>`;
     return h+'</div>';
   }
 
@@ -184,10 +253,14 @@
     const cycleVal=fCycle.value;
     const leaderVal=fLeader.value;
 
-    // Pick the cycle's leaders (default = latest)
+    // Pick the cycle's leaders (default = latest live cycle)
     let leaders=od.leaders;
     if(cycleVal&&od.leadersByCycle&&od.leadersByCycle[cycleVal]){
       leaders=od.leadersByCycle[cycleVal];
+    } else if(cycleVal && !od.leadersByCycle[cycleVal]){
+      // Selected period is historical (not in DynamoDB) — clear leader table since
+      // we don't have per-leader granularity for older cycles.
+      leaders=[];
     }
 
     // Filter by leader name (just one row)
@@ -195,29 +268,45 @@
       leaders=leaders.filter(l=>l.leader===leaderVal);
     }
 
-    // Filter by category — emphasizes the chosen category, dims the others.
-    // We don't drop rows; we restyle them so totals stay visible.
+    // Re-render leader table
     const tableHtml=buildLeaderTable(leaders);
     const container=document.getElementById('leaderTable-'+DATA.activeOrg);
     if(container)container.innerHTML=tableHtml;
 
-    // For category filter, also tweak the stat row to highlight only the chosen category's count.
-    // (Simplest approach: re-show stats but hide the categories that aren't selected via class.)
-    // For now, just re-render stats based on filtered leaders so totals reflect the active filter.
+    // Re-render historical table — filter by selected period if it's a historical one
+    const histContainer=document.getElementById('historicalTable-'+DATA.activeOrg);
+    if(histContainer){
+      // If cycleVal looks like a historical period (e.g. "2024 H1"), filter to just that row;
+      // otherwise show all historical rows.
+      const historicalFilter=isHistoricalPeriod(cycleVal)?cycleVal:'';
+      histContainer.innerHTML=buildHistoricalTable(DATA.activeOrg,historicalFilter);
+    }
+
+    // Recompute stat row from filtered leaders if any selection is active.
     if(leaders.length){
       const totals=leaders.reduce((acc,l)=>{
         acc.nom+=l.nominated;acc.resp+=l.responded;acc.p+=l.promoter_count;
         acc.pa+=l.passive_count;acc.d+=l.detractor_count;return acc;
       },{nom:0,resp:0,p:0,pa:0,d:0});
-      // NPS score: weighted by responded
       const totalResp=totals.resp||1;
       let nps=0;
       for(const l of leaders){nps+=(l.nps_score*l.responded);}
       nps=totalResp?(nps/totalResp):0;
-      // If category filter active, only highlight that bucket
-      let display={...totals,nps};
-      setStat(display);
+      setStat({...totals,nps});
+    } else if(cycleVal && isHistoricalPeriod(cycleVal)){
+      // For historical periods, show that period's totals in the stat row
+      const data=HISTORICAL_DATA[DATA.activeOrg];
+      const row=data&&data.rows.find(r=>r.period===cycleVal);
+      if(row){
+        setStat({nps:row.nps,p:row.promoter,pa:row.passive,d:row.detractor,
+                 resp:row.responded,nom:row.nominated});
+      }
     }
+  }
+
+  function isHistoricalPeriod(value){
+    // Historical period labels look like "2024 H1", "2025 H2", etc.
+    return /^\d{4}\s*H[12]$/i.test(value||'');
   }
 
   async function load(){
@@ -264,6 +353,21 @@
             seenCycles.add(s.cycle_id);
             fCycle.add(new Option(lbl,s.cycle_id));
           }
+        }
+      }
+
+      // Add historical periods to the Cycle dropdown so users can drill into prior cycles.
+      // Historical data is hardcoded (in HISTORICAL_DATA) until a workbook source is wired up.
+      const historicalPeriods=new Set();
+      for(const oid of Object.keys(HISTORICAL_DATA)){
+        for(const r of HISTORICAL_DATA[oid].rows){historicalPeriods.add(r.period);}
+      }
+      // Sort historical periods chronologically: "2024 H1" < "2024 H2" < "2025 H1" ...
+      const sortedHist=Array.from(historicalPeriods).sort();
+      for(const p of sortedHist){
+        if(!seenCycles.has(p)){
+          seenCycles.add(p);
+          fCycle.add(new Option(p,p));
         }
       }
 
