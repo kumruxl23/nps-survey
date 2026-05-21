@@ -367,6 +367,16 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
         email = (assignee.get("email") or "").lower()
         respondent_name = assignee.get("name", "") or ""
 
+        # Asana task names follow the convention "<Leader>, <Stakeholder>".
+        # When assignee.name is empty (anonymous form submitter), fall back
+        # to the part of the task name after the first comma.
+        if not respondent_name:
+            full = (task.get("name") or "").strip()
+            if "," in full:
+                respondent_name = full.split(",", 1)[1].strip()
+            else:
+                respondent_name = full
+
         recorded_at = task.get("completed_at") or task.get("created_at") \
             or datetime.now(timezone.utc).isoformat()
 
@@ -398,6 +408,7 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
             category=category,
             leader=leader,
             feedback_text=feedback_text,
+            respondent_name=respondent_name,
             recorded_at=recorded_at,
         )
         if dry_run:

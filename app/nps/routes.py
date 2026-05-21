@@ -520,6 +520,7 @@ def list_responses_for_dashboard():
         {
             "response_id": r.response_id,
             "leader": r.leader or "",
+            "respondent_name": getattr(r, "respondent_name", "") or "",
             "nps_score": r.nps_score,
             "category": r.category,
             "feedback_text": r.feedback_text or "",

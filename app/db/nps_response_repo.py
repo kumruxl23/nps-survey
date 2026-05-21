@@ -50,16 +50,14 @@ def _item_to_response(item: dict) -> NpsResponse:
         category=item["category"],
         leader=item.get("leader", ""),
         feedback_text=item.get("feedback_text", ""),
+        respondent_name=item.get("respondent_name", ""),
         recorded_at=item.get("recorded_at", ""),
         admin_comment=item.get("admin_comment", ""),
     )
 
 
 def put_response(response: NpsResponse) -> None:
-    """Store an NpsResponse in DynamoDB. Sets recorded_at if not already set.
-
-    No email or name fields are stored — preserves stakeholder anonymity.
-    """
+    """Store an NpsResponse in DynamoDB. Sets recorded_at if not already set."""
     table = _get_table()
     composite_key = _build_composite_key(response.org_id, response.cycle_id)
     item = {
@@ -69,6 +67,7 @@ def put_response(response: NpsResponse) -> None:
         "category": response.category,
         "leader": response.leader,
         "feedback_text": response.feedback_text,
+        "respondent_name": response.respondent_name,
         "recorded_at": response.recorded_at or datetime.now(timezone.utc).isoformat(),
         "admin_comment": response.admin_comment,
     }

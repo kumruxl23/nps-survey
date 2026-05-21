@@ -100,8 +100,8 @@ def main() -> None:
     tasks = asana_client.list_tasks_in_section(target["gid"])
     logger.info("[%s] %d tasks in section '%s'", args.org, len(tasks), target.get("name"))
 
-    # Build a lookup of (score, leader, day) -> [feedback_text, ...]
-    asana_lookup: dict[tuple[int, str, str], list[str]] = defaultdict(list)
+    # Build a lookup of (score, leader, day) -> [(feedback_text, respondent_name), ...]
+    asana_lookup: dict[tuple[int, str, str], list[tuple[str, str]]] = defaultdict(list)
     for task in tasks:
         score = _parse_score(_custom_field_value(task, nps_gid))
         if score is None:
@@ -112,12 +112,20 @@ def main() -> None:
         feedback_text = ""
         if feedback_raw is not None:
             feedback_text = str(feedback_raw).strip()
-        if not feedback_text:
-            continue
+        # Pull the respondent name from "<Leader>, <Stakeholder>" task title
+        full_name = (task.get("name") or "").strip()
+        respondent_name = ""
+        if "," in full_name:
+            respondent_name = full_name.split(",", 1)[1].strip()
+        else:
+            respondent_name = full_name
+        # Index every task — even ones with empty feedback — so we can fill in
+        # the respondent name on responses that previously had no match.
         day = (task.get("completed_at") or task.get("created_at") or "")[:10]
-        asana_lookup[(score, leader, day)].append(feedback_text)
+        asana_lookup[(score, leader, day)].append((feedback_text, respondent_name))
 
-    logger.info("[%s] %d Asana tasks have non-empty feedback", args.org, sum(len(v) for v in asana_lookup.values()))
+    feedback_count = sum(1 for v in asana_lookup.values() for f, _ in v if f)
+    logger.info("[%s] %d Asana tasks have non-empty feedback", args.org, feedback_count)
 
     # Walk existing responses, update feedback_text where empty + a match exists
     responses = nps_response_repo.list_responses(args.org, args.cycle)
@@ -132,7 +140,11 @@ def main() -> None:
     remaining = {k: list(v) for k, v in asana_lookup.items()}
 
     for r in responses:
-        if (r.feedback_text or "").strip():
+        # Skip rows that already have BOTH feedback and respondent_name set.
+        # If only one is missing we still try to fill the other.
+        had_feedback = bool((r.feedback_text or "").strip())
+        had_name = bool((getattr(r, "respondent_name", "") or "").strip())
+        if had_feedback and had_name:
             skipped_already_set += 1
             continue
         day = (r.recorded_at or "")[:10]
@@ -143,15 +155,28 @@ def main() -> None:
             continue
         if len(choices) > 1:
             ambiguous += 1
-        new_text = choices.pop(0)
+        feedback_text, respondent_name = choices.pop(0)
 
-        # Persist
+        # Build the SET expression conditionally so we don't clobber data
+        # the user already manually filled in.
+        set_parts = []
+        expr_vals = {}
+        if not had_feedback and feedback_text:
+            set_parts.append("feedback_text = :f")
+            expr_vals[":f"] = feedback_text
+        if not had_name and respondent_name:
+            set_parts.append("respondent_name = :n")
+            expr_vals[":n"] = respondent_name
+
+        if not set_parts:
+            # Nothing to update for this response.
+            skipped_no_match += 1
+            continue
+
         if args.dry_run:
-            logger.debug("[%s] DRY RUN response_id=%s would set feedback to %.40r",
-                         args.org, r.response_id, new_text)
+            logger.debug("[%s] DRY RUN response_id=%s would set %s",
+                         args.org, r.response_id, set_parts)
         else:
-            # Use the existing put_response which writes the whole row, but
-            # we don't want to lose admin_comment etc. Use a low-level update.
             ddb = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION"])
             table = ddb.Table(os.environ.get("NPS_RESPONSES_TABLE", "NpsResponses"))
             table.update_item(
@@ -159,8 +184,8 @@ def main() -> None:
                     "org_id_cycle_id": f"{r.org_id}#{r.cycle_id}",
                     "response_id": r.response_id,
                 },
-                UpdateExpression="SET feedback_text = :f",
-                ExpressionAttributeValues={":f": new_text},
+                UpdateExpression="SET " + ", ".join(set_parts),
+                ExpressionAttributeValues=expr_vals,
             )
         updated += 1
 

@@ -66,6 +66,15 @@ class Nomination:
 
 @dataclass
 class NpsResponse:
+    """A single survey response.
+
+    Historically this dataclass omitted respondent identity to preserve
+    anonymity. From May 2026 we record ``respondent_name`` so admins can
+    follow up with low-scorers; visibility will be gated behind SSO-based
+    role permissions in a follow-up. ``feedback_text`` is the free-form
+    written feedback (Asana's ``Feedback`` custom field).
+    """
+
     org_id: str
     cycle_id: str
     response_id: str
@@ -73,6 +82,7 @@ class NpsResponse:
     category: NpsCategory
     leader: str = ""  # leader this response is tagged against
     feedback_text: str = ""
+    respondent_name: str = ""
     recorded_at: str = ""
     admin_comment: str = ""  # internal note added by admins/editors after the fact
 
