@@ -19,6 +19,7 @@ class OrgConfig:
     custom_field_org_name_gid: str
     custom_field_leader_gid: str = ""
     custom_field_feedback_gid: str = ""  # text/enum field with respondent's free-form feedback
+    custom_field_what_missing_gid: str = ""  # text field "What was missing" — concat with feedback
     quip_doc_id: str = ""
     reminder_channels: list[ReminderChannel] = field(default_factory=lambda: ["email"])
     slack_bot_token: str = ""

@@ -87,6 +87,7 @@ def main() -> None:
     nps_gid = org.custom_field_nps_score_gid
     leader_gid = getattr(org, "custom_field_leader_gid", "")
     feedback_gid = getattr(org, "custom_field_feedback_gid", "")
+    what_missing_gid = getattr(org, "custom_field_what_missing_gid", "")
 
     if not feedback_gid or "placeholder" in str(feedback_gid).lower() or "tbd" in str(feedback_gid).lower():
         sys.exit(f"[{args.org}] custom_field_feedback_gid not set ({feedback_gid!r}). "
@@ -101,17 +102,30 @@ def main() -> None:
     logger.info("[%s] %d tasks in section '%s'", args.org, len(tasks), target.get("name"))
 
     # Build a lookup of (score, leader, day) -> [(feedback_text, respondent_name), ...]
+    # Plus a day-agnostic fallback (score, leader) -> [...] for matching when
+    # the recorded date drifted between Asana and DynamoDB.
     asana_lookup: dict[tuple[int, str, str], list[tuple[str, str]]] = defaultdict(list)
+    asana_lookup_no_day: dict[tuple[int, str], list[tuple[str, str]]] = defaultdict(list)
     for task in tasks:
         score = _parse_score(_custom_field_value(task, nps_gid))
         if score is None:
             continue
         leader_raw = _custom_field_value(task, leader_gid) if leader_gid else None
         leader = (leader_raw or "").strip() if isinstance(leader_raw, str) else ""
-        feedback_raw = _custom_field_value(task, feedback_gid)
-        feedback_text = ""
-        if feedback_raw is not None:
-            feedback_text = str(feedback_raw).strip()
+
+        # Combine Feedback + What was missing — same logic as backfill_from_asana.
+        parts: list[str] = []
+        for gid in (feedback_gid, what_missing_gid):
+            if not gid:
+                continue
+            raw = _custom_field_value(task, gid)
+            if raw is None:
+                continue
+            txt = str(raw).strip() if not isinstance(raw, str) else raw.strip()
+            if txt and txt.lower() not in ("see above", "n/a", "na", "none"):
+                parts.append(txt)
+        feedback_text = "\n\n".join(parts)
+
         # Pull the respondent name from "<Leader>, <Stakeholder>" task title
         full_name = (task.get("name") or "").strip()
         respondent_name = ""
@@ -119,10 +133,12 @@ def main() -> None:
             respondent_name = full_name.split(",", 1)[1].strip()
         else:
             respondent_name = full_name
+
         # Index every task — even ones with empty feedback — so we can fill in
         # the respondent name on responses that previously had no match.
         day = (task.get("completed_at") or task.get("created_at") or "")[:10]
         asana_lookup[(score, leader, day)].append((feedback_text, respondent_name))
+        asana_lookup_no_day[(score, leader)].append((feedback_text, respondent_name))
 
     feedback_count = sum(1 for v in asana_lookup.values() for f, _ in v if f)
     logger.info("[%s] %d Asana tasks have non-empty feedback", args.org, feedback_count)
@@ -135,13 +151,14 @@ def main() -> None:
     skipped_no_match = 0
     skipped_already_set = 0
     ambiguous = 0
+    matched_loose = 0  # how many matched on (score, leader) but not on (score, leader, day)
 
-    # Use a copy of the lookup so we can pop matches as we use them
+    # Use copies so we can pop matches as we use them
     remaining = {k: list(v) for k, v in asana_lookup.items()}
+    remaining_loose = {k: list(v) for k, v in asana_lookup_no_day.items()}
 
     for r in responses:
         # Skip rows that already have BOTH feedback and respondent_name set.
-        # If only one is missing we still try to fill the other.
         had_feedback = bool((r.feedback_text or "").strip())
         had_name = bool((getattr(r, "respondent_name", "") or "").strip())
         if had_feedback and had_name:
@@ -150,12 +167,30 @@ def main() -> None:
         day = (r.recorded_at or "")[:10]
         key = (int(r.nps_score), r.leader or "", day)
         choices = remaining.get(key, [])
+        loose_used = False
+        if not choices:
+            # Day didn't line up. Fall back to (score, leader) only.
+            loose_key = (int(r.nps_score), r.leader or "")
+            choices = remaining_loose.get(loose_key, [])
+            loose_used = bool(choices)
+
         if not choices:
             skipped_no_match += 1
             continue
         if len(choices) > 1:
             ambiguous += 1
+        if loose_used:
+            matched_loose += 1
+
         feedback_text, respondent_name = choices.pop(0)
+        # Also remove from the strict lookup so we don't double-use
+        if not loose_used:
+            # Already came from `remaining`; keep loose in sync by best-effort
+            loose_key = (int(r.nps_score), r.leader or "")
+            for i, item in enumerate(remaining_loose.get(loose_key, [])):
+                if item == (feedback_text, respondent_name):
+                    remaining_loose[loose_key].pop(i)
+                    break
 
         # Build the SET expression conditionally so we don't clobber data
         # the user already manually filled in.
@@ -189,8 +224,8 @@ def main() -> None:
             )
         updated += 1
 
-    logger.info("[%s] updated=%d skipped_already_set=%d skipped_no_match=%d ambiguous=%d",
-                args.org, updated, skipped_already_set, skipped_no_match, ambiguous)
+    logger.info("[%s] updated=%d skipped_already_set=%d skipped_no_match=%d ambiguous=%d matched_loose=%d",
+                args.org, updated, skipped_already_set, skipped_no_match, ambiguous, matched_loose)
     if args.dry_run:
         logger.info("(DRY RUN — nothing was written)")
 

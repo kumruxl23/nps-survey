@@ -99,21 +99,35 @@ GID_NAME_MAP = {
     "custom_field_org_name_gid": ("org name", "org"),
     "custom_field_leader_gid": ("leader",),
     "custom_field_feedback_gid": ("feedback",),
+    "custom_field_what_missing_gid": ("what was missing", "what missing", "missing"),
 }
 
 
 def _match_gid_by_name(field_settings: list[dict], name_hints: tuple[str, ...]) -> str | None:
-    """Find a custom-field GID whose name (case-insensitive) contains any of the hints.
+    """Find a custom-field GID whose name (case-insensitive) matches a hint.
 
-    Earlier hints win (more specific match preferred).
+    Two-pass: prefers exact match, falls back to substring match. Earlier
+    hints win when multiple are equally specific.
     """
+    # Pre-extract names + gids
+    rows = [(((s.get("custom_field") or {}).get("name") or "").lower(),
+             (s.get("custom_field") or {}).get("gid"))
+            for s in field_settings]
+
+    # Pass 1: exact match
     for hint in name_hints:
-        hint_lower = hint.lower()
-        for setting in field_settings:
-            cf = setting.get("custom_field", {})
-            cf_name = (cf.get("name") or "").lower()
-            if hint_lower in cf_name:
-                return cf.get("gid")
+        hl = hint.lower()
+        for nm, gid in rows:
+            if nm == hl and gid:
+                return gid
+
+    # Pass 2: substring match
+    for hint in name_hints:
+        hl = hint.lower()
+        for nm, gid in rows:
+            if hl in nm and gid:
+                return gid
+
     return None
 
 
@@ -271,6 +285,7 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
     cat_gid = org.custom_field_category_gid
     leader_gid = getattr(org, "custom_field_leader_gid", "") or ""
     feedback_gid = getattr(org, "custom_field_feedback_gid", "") or ""
+    what_missing_gid = getattr(org, "custom_field_what_missing_gid", "") or ""
 
     if _is_placeholder_gid(nps_gid):
         logger.error("[%s] custom_field_nps_score_gid is still a placeholder ('%s'). "
@@ -353,14 +368,21 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
         leader_raw = _custom_field_value(task, leader_gid) if leader_gid else None
         leader = (leader_raw or "").strip() if isinstance(leader_raw, str) else ""
 
-        # Feedback text — read from the Feedback custom field
-        feedback_raw = _custom_field_value(task, feedback_gid) if feedback_gid else None
-        feedback_text = ""
-        if feedback_raw is not None:
-            if isinstance(feedback_raw, str):
-                feedback_text = feedback_raw.strip()
-            else:
-                feedback_text = str(feedback_raw).strip()
+        # Feedback text — read the Feedback field. Concat "What was missing"
+        # if present so feedback isn't fragmented across fields. Some
+        # respondents write "See above" in Feedback and put the real text
+        # in "What was missing".
+        feedback_parts = []
+        for gid in (feedback_gid, what_missing_gid):
+            if not gid:
+                continue
+            raw = _custom_field_value(task, gid)
+            if raw is None:
+                continue
+            text = str(raw).strip() if not isinstance(raw, str) else raw.strip()
+            if text and text.lower() not in ("see above", "n/a", "na", "none"):
+                feedback_parts.append(text)
+        feedback_text = "\n\n".join(feedback_parts)
 
         # Respondent identity — used for matching against existing nominations + creating one if missing
         assignee = task.get("assignee") or {}
