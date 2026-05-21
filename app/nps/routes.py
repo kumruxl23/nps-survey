@@ -471,6 +471,95 @@ def responses_view():
     return render_template("nps_responses.html")
 
 
+@nps_bp.route("/responses", methods=["GET"])
+@login_required
+def list_responses_for_dashboard():
+    """List responses for an org+cycle, optionally filtered by leader.
+
+    Query params:
+        org_id (str): required
+        cycle_id (str): required
+        leader (str): optional — filter to responses tagged against one leader
+        category (str): optional — Promoter / Passive / Detractor
+
+    Returns a list of {response_id, leader, nps_score, category, feedback_text,
+    recorded_at, admin_comment} dicts. No email/name fields (anonymity by design).
+    """
+    org_id = request.args.get("org_id", "")
+    cycle_id = request.args.get("cycle_id", "")
+    leader_filter = (request.args.get("leader") or "").strip()
+    category_filter = (request.args.get("category") or "").strip()
+
+    if not org_id or not cycle_id:
+        return jsonify({"error": "org_id and cycle_id are required"}), 400
+
+    responses = nps_response_service.get_responses(org_id, cycle_id)
+    if leader_filter:
+        responses = [r for r in responses if (r.leader or "") == leader_filter]
+    if category_filter:
+        responses = [r for r in responses if r.category == category_filter]
+
+    # Sort: leader name asc, then recorded_at desc (newest first within a leader)
+    responses.sort(key=lambda r: (r.leader or "", -1 * (
+        # crude descending sort — convert iso timestamp to a comparable string
+        # then negate by inverting in tuple ordering below
+        0
+    )))
+    responses.sort(key=lambda r: ((r.leader or ""), r.recorded_at or ""), reverse=False)
+    # The above compounds: primary leader asc, then recorded_at asc as a tiebreaker.
+    # Reverse the recorded_at pass on the client side if needed, or do it here:
+    responses_sorted: list = []
+    by_leader: dict[str, list] = {}
+    for r in responses:
+        by_leader.setdefault(r.leader or "Unassigned", []).append(r)
+    for leader_key in sorted(by_leader.keys()):
+        for r in sorted(by_leader[leader_key], key=lambda x: x.recorded_at or "", reverse=True):
+            responses_sorted.append(r)
+
+    return jsonify([
+        {
+            "response_id": r.response_id,
+            "leader": r.leader or "",
+            "nps_score": r.nps_score,
+            "category": r.category,
+            "feedback_text": r.feedback_text or "",
+            "recorded_at": r.recorded_at or "",
+            "admin_comment": getattr(r, "admin_comment", "") or "",
+        }
+        for r in responses_sorted
+    ])
+
+
+@nps_bp.route("/responses/comment", methods=["POST"])
+@role_required("admin", "editor")
+def update_response_comment():
+    """Set or clear the admin_comment on a single response.
+
+    Body JSON:
+        org_id (str): required
+        cycle_id (str): required
+        response_id (str): required
+        comment (str): required (use empty string to clear)
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        cycle_id = data.get("cycle_id", "")
+        response_id = data.get("response_id", "")
+        comment = data.get("comment", "")
+        if not all([org_id, cycle_id, response_id]):
+            return jsonify({"error": "org_id, cycle_id, response_id required"}), 400
+        # Bound to a sane length so the field doesn't become a free-text dumping ground.
+        if len(comment) > 2000:
+            return jsonify({"error": "comment is too long (max 2000 chars)"}), 400
+        from app.db import nps_response_repo as _resp_repo
+        _resp_repo.update_admin_comment(org_id, cycle_id, response_id, comment)
+        return jsonify({"status": "ok"})
+    except Exception as exc:
+        logger.exception("Error updating response admin_comment")
+        return jsonify({"error": str(exc)}), 500
+
+
 @nps_bp.route("/dashboard/summary", methods=["GET"])
 @login_required
 def dashboard_summary():

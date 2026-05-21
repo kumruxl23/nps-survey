@@ -51,6 +51,7 @@ def _item_to_response(item: dict) -> NpsResponse:
         leader=item.get("leader", ""),
         feedback_text=item.get("feedback_text", ""),
         recorded_at=item.get("recorded_at", ""),
+        admin_comment=item.get("admin_comment", ""),
     )
 
 
@@ -69,8 +70,22 @@ def put_response(response: NpsResponse) -> None:
         "leader": response.leader,
         "feedback_text": response.feedback_text,
         "recorded_at": response.recorded_at or datetime.now(timezone.utc).isoformat(),
+        "admin_comment": response.admin_comment,
     }
     table.put_item(Item=item)
+
+
+def update_admin_comment(org_id: str, cycle_id: str, response_id: str, comment: str) -> None:
+    """Update only the admin_comment field on an existing response."""
+    table = _get_table()
+    table.update_item(
+        Key={
+            "org_id_cycle_id": _build_composite_key(org_id, cycle_id),
+            "response_id": response_id,
+        },
+        UpdateExpression="SET admin_comment = :c",
+        ExpressionAttributeValues={":c": comment},
+    )
 
 
 def list_responses(org_id: str, cycle_id: str) -> list[NpsResponse]:

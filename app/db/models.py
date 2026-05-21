@@ -73,6 +73,7 @@ class NpsResponse:
     leader: str = ""  # leader this response is tagged against
     feedback_text: str = ""
     recorded_at: str = ""
+    admin_comment: str = ""  # internal note added by admins/editors after the fact
 
 
 @dataclass

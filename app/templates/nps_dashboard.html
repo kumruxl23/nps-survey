@@ -59,6 +59,37 @@
     </div>
   </div>
 </div>
+
+<!-- Feedback Modal (used for "View Feedback" button — responses grouped by leader) -->
+<div class="modal fade" id="feedbackModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Feedback by Leader</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3 d-flex gap-2 align-items-center">
+          <label class="form-label m-0 small text-muted">Filter:</label>
+          <select id="feedbackFilterLeader" class="form-select form-select-sm" style="max-width: 220px;">
+            <option value="">All Leaders</option>
+          </select>
+          <select id="feedbackFilterCategory" class="form-select form-select-sm" style="max-width: 180px;">
+            <option value="">All Categories</option>
+            <option value="Promoter">Promoter</option>
+            <option value="Passive">Passive</option>
+            <option value="Detractor">Detractor</option>
+          </select>
+          <button id="feedbackOnlyComments" class="btn btn-sm btn-outline-secondary">Only with comments</button>
+        </div>
+        <div id="feedbackModalBody"><div class="text-center"><div class="spinner-border text-success"></div></div></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -187,19 +218,29 @@
   }
 
   // ----- Summary pane (All Orgs) -----
-  // Org Comparison columns: Organization, Cycle, NPS, Rate, Nominated, Responded, P, Pa, D.
+  // Org Comparison columns: Organization, Cycle, NPS, Rate, Nominated, Responded, Promoter, Passive, Detractor.
   // Sprint 2: Rate moved next to NPS, Pending column removed.
+  // Sprint 3: P/Pa/D headers expanded to full names (Promoter/Passive/Detractor),
+  //          rows sorted to match the org-tab order (CPT IN, CPT NA, FEC).
   function buildSummaryPane(d){
+    const ORG_ORDER={whs_cpt_in:0, whs_cpt_na:1, fec:2};
     let h='<div class="tab-pane fade show active" id="pane-all" role="tabpanel">';
     if(d.org_summaries&&d.org_summaries.length){
+      const rows=d.org_summaries.slice().sort((a,b)=>{
+        const ai=(a.org_id in ORG_ORDER)?ORG_ORDER[a.org_id]:99;
+        const bi=(b.org_id in ORG_ORDER)?ORG_ORDER[b.org_id]:99;
+        if(ai!==bi)return ai-bi;
+        return (a.org_name||'').localeCompare(b.org_name||'');
+      });
       h+=`<h6 class="mb-2">Organization Comparison</h6>
         <table class="table table-sm table-hover bg-white rounded"><thead class="table-light"><tr>
         <th>Organization</th><th>Cycle</th>
         <th class="text-center">NPS</th><th class="text-center">Rate</th>
         <th class="text-center">Nominated</th><th class="text-center">Responded</th>
-        <th class="text-center text-success">P</th><th class="text-center text-warning">Pa</th>
-        <th class="text-center text-danger">D</th></tr></thead><tbody>`;
-      for(const o of d.org_summaries){
+        <th class="text-center text-success">Promoter</th>
+        <th class="text-center text-warning">Passive</th>
+        <th class="text-center text-danger">Detractor</th></tr></thead><tbody>`;
+      for(const o of rows){
         h+=`<tr><td><strong>${o.org_name}</strong></td><td>${o.cycle_name}</td>
           <td class="text-center"><strong class="${nc(o.nps_score)}">${o.nps_score}</strong></td>
           <td class="text-center">${(o.response_rate*100).toFixed(0)}%</td>
@@ -227,6 +268,10 @@
     h+=`<div class="d-flex justify-content-between align-items-center mb-3">
       <h6 class="text-muted m-0">Current Cycle: ${cn(latest)}</h6>
       <div>
+        <button class="btn btn-sm btn-outline-info me-2" id="btnFeedback-${orgId}"
+          data-org="${orgId}" data-cycle="${latest.cycle_id}">
+          View Feedback
+        </button>
         <button class="btn btn-sm btn-outline-secondary me-2" id="btnViewPending-${orgId}"
           data-org="${orgId}" data-cycle="${latest.cycle_id}">
           View Pending (${pendingCount})
@@ -504,10 +549,173 @@
     }
   }
 
+  // ----- Feedback view (responses grouped by leader, with admin comment) -----
+
+  let _feedbackState={orgId:null,cycleId:null,all:[],onlyComments:false};
+
+  function _scoreClass(score){
+    if(score>=9)return 'text-success';
+    if(score>=7)return 'text-warning';
+    return 'text-danger';
+  }
+
+  function _esc(s){
+    return String(s||'').replace(/[<>&"']/g,c=>({
+      '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  function renderFeedbackList(){
+    const body=document.getElementById('feedbackModalBody');
+    const lf=document.getElementById('feedbackFilterLeader').value;
+    const cf=document.getElementById('feedbackFilterCategory').value;
+    let rows=_feedbackState.all.slice();
+    if(lf)rows=rows.filter(r=>(r.leader||'')===lf);
+    if(cf)rows=rows.filter(r=>r.category===cf);
+    if(_feedbackState.onlyComments)rows=rows.filter(r=>(r.feedback_text||'').trim().length>0);
+
+    if(!rows.length){
+      body.innerHTML='<p class="text-muted m-0">No responses match the current filters.</p>';
+      return;
+    }
+
+    // Group by leader
+    const byLeader={};
+    for(const r of rows){
+      const k=r.leader||'Unassigned';
+      (byLeader[k]=byLeader[k]||[]).push(r);
+    }
+
+    let h='';
+    const leaderKeys=Object.keys(byLeader).sort();
+    for(const leader of leaderKeys){
+      const items=byLeader[leader];
+      h+=`<div class="card mb-3"><div class="card-header bg-light d-flex justify-content-between">
+        <strong>${_esc(leader)}</strong>
+        <span class="text-muted small">${items.length} response${items.length===1?'':'s'}</span></div>
+        <div class="card-body p-0"><table class="table table-sm mb-0">
+        <thead class="table-light"><tr>
+          <th style="width:80px;" class="text-center">Score</th>
+          <th>Feedback</th>
+          <th style="width:140px;" class="text-nowrap">Date</th>
+          <th style="width:260px;">Admin comment</th>
+        </tr></thead><tbody>`;
+      for(const r of items){
+        const date=(r.recorded_at||'').slice(0,10);
+        const cat=r.category||'';
+        const catColor=cat==='Promoter'?'text-success':(cat==='Passive'?'text-warning':'text-danger');
+        const comment=_esc(r.admin_comment||'');
+        const feedbackText=_esc(r.feedback_text||'');
+        h+=`<tr>
+          <td class="text-center">
+            <strong class="${_scoreClass(r.nps_score)}">${r.nps_score}</strong>
+            <div class="small ${catColor}">${cat}</div>
+          </td>
+          <td>${feedbackText||'<em class="text-muted">No comment</em>'}</td>
+          <td class="text-nowrap small text-muted">${date}</td>
+          <td>
+            <div class="d-flex gap-1">
+              <input type="text" class="form-control form-control-sm feedback-comment-input"
+                value="${comment}" data-response-id="${r.response_id}" placeholder="Add note..." maxlength="2000">
+              <button class="btn btn-sm btn-outline-primary feedback-comment-save"
+                data-response-id="${r.response_id}">Save</button>
+            </div>
+          </td>
+        </tr>`;
+      }
+      h+='</tbody></table></div></div>';
+    }
+    body.innerHTML=h;
+  }
+
+  async function openFeedbackModal(orgId,cycleId){
+    _feedbackState.orgId=orgId;
+    _feedbackState.cycleId=cycleId;
+    _feedbackState.onlyComments=false;
+    document.getElementById('feedbackOnlyComments').classList.remove('active');
+    document.getElementById('feedbackFilterLeader').value='';
+    document.getElementById('feedbackFilterCategory').value='';
+    const body=document.getElementById('feedbackModalBody');
+    body.innerHTML='<div class="text-center"><div class="spinner-border text-success"></div></div>';
+
+    const modal=new bootstrap.Modal(document.getElementById('feedbackModal'));
+    modal.show();
+
+    try{
+      const resp=await fetch(`/nps/responses?org_id=${encodeURIComponent(orgId)}&cycle_id=${encodeURIComponent(cycleId)}`);
+      if(!resp.ok){
+        body.innerHTML='<div class="alert alert-danger">Failed to load: '+resp.status+'</div>';
+        return;
+      }
+      _feedbackState.all=await resp.json();
+
+      // Populate the leader filter from data
+      const sel=document.getElementById('feedbackFilterLeader');
+      sel.innerHTML='<option value="">All Leaders</option>';
+      const seen=new Set();
+      for(const r of _feedbackState.all){
+        const L=r.leader||'Unassigned';
+        if(!seen.has(L)){seen.add(L);sel.add(new Option(L,L));}
+      }
+
+      renderFeedbackList();
+    }catch(err){
+      body.innerHTML='<div class="alert alert-danger">Error: '+err.message+'</div>';
+    }
+  }
+
+  async function saveAdminComment(responseId, comment, btn){
+    const original=btn.textContent;
+    btn.disabled=true;btn.textContent='Saving...';
+    try{
+      const resp=await fetch('/nps/responses/comment',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          org_id:_feedbackState.orgId,
+          cycle_id:_feedbackState.cycleId,
+          response_id:responseId,
+          comment:comment,
+        }),
+      });
+      if(!resp.ok){
+        const data=await resp.json().catch(()=>({}));
+        alert('Save failed: '+(data.error||resp.status));
+      } else {
+        // Reflect the saved comment in the in-memory state
+        const r=_feedbackState.all.find(x=>x.response_id===responseId);
+        if(r)r.admin_comment=comment;
+        btn.textContent='Saved ✓';
+        btn.classList.remove('btn-outline-primary');
+        btn.classList.add('btn-success');
+        setTimeout(()=>{
+          btn.textContent=original;
+          btn.classList.remove('btn-success');
+          btn.classList.add('btn-outline-primary');
+          btn.disabled=false;
+        },1500);
+        return;
+      }
+    }catch(err){
+      alert('Save failed: '+err.message);
+    }
+    btn.disabled=false;btn.textContent=original;
+  }
+
   async function load(){
     try{
       const orgs=await F('/nps/orgs');
-      DATA.orgs=orgs.filter(o=>o.is_active);
+      // Display order: WHS CPT IN, then WHS CPT NA, then FEC. Anything else
+      // sorts alphabetically after these. Filter out inactive orgs.
+      const ORG_ORDER={whs_cpt_in:0, whs_cpt_na:1, fec:2};
+      DATA.orgs=orgs
+        .filter(o=>o.is_active)
+        .sort((a,b)=>{
+          const ai=(a.org_id in ORG_ORDER)?ORG_ORDER[a.org_id]:99;
+          const bi=(b.org_id in ORG_ORDER)?ORG_ORDER[b.org_id]:99;
+          if(ai!==bi)return ai-bi;
+          return (a.org_name||a.org_id).localeCompare(b.org_name||b.org_id);
+        });
       loading.classList.add('d-none');
       main.classList.remove('d-none');
       if(!DATA.orgs.length)return;
@@ -632,6 +840,12 @@
           await openPendingModal(viewPending.dataset.org, viewPending.dataset.cycle);
           return;
         }
+        // "View Feedback" — open modal with responses grouped by leader
+        const viewFeedback=e.target.closest('[id^="btnFeedback-"]');
+        if(viewFeedback){
+          await openFeedbackModal(viewFeedback.dataset.org, viewFeedback.dataset.cycle);
+          return;
+        }
       });
 
       // Modal-internal individual-send buttons (delegated)
@@ -641,6 +855,26 @@
         if(!btn)return;
         e.preventDefault();
         await handleIndividualRemind(btn);
+      });
+
+      // Feedback modal — Save admin-comment buttons (delegated)
+      const feedbackModalBody=document.getElementById('feedbackModalBody');
+      feedbackModalBody.addEventListener('click',async function(e){
+        const saveBtn=e.target.closest('.feedback-comment-save');
+        if(!saveBtn)return;
+        const id=saveBtn.dataset.responseId;
+        const input=feedbackModalBody.querySelector(`.feedback-comment-input[data-response-id="${id}"]`);
+        const comment=input?input.value:'';
+        await saveAdminComment(id, comment, saveBtn);
+      });
+
+      // Feedback modal — filter changes
+      document.getElementById('feedbackFilterLeader').addEventListener('change',renderFeedbackList);
+      document.getElementById('feedbackFilterCategory').addEventListener('change',renderFeedbackList);
+      document.getElementById('feedbackOnlyComments').addEventListener('click',function(){
+        _feedbackState.onlyComments=!_feedbackState.onlyComments;
+        this.classList.toggle('active',_feedbackState.onlyComments);
+        renderFeedbackList();
       });
 
       // Clear button
