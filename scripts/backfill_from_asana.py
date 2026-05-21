@@ -98,6 +98,7 @@ GID_NAME_MAP = {
     "custom_field_category_gid": ("category",),
     "custom_field_org_name_gid": ("org name", "org"),
     "custom_field_leader_gid": ("leader",),
+    "custom_field_feedback_gid": ("feedback",),
 }
 
 
@@ -269,6 +270,7 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
     nps_gid = org.custom_field_nps_score_gid
     cat_gid = org.custom_field_category_gid
     leader_gid = getattr(org, "custom_field_leader_gid", "") or ""
+    feedback_gid = getattr(org, "custom_field_feedback_gid", "") or ""
 
     if _is_placeholder_gid(nps_gid):
         logger.error("[%s] custom_field_nps_score_gid is still a placeholder ('%s'). "
@@ -351,6 +353,15 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
         leader_raw = _custom_field_value(task, leader_gid) if leader_gid else None
         leader = (leader_raw or "").strip() if isinstance(leader_raw, str) else ""
 
+        # Feedback text — read from the Feedback custom field
+        feedback_raw = _custom_field_value(task, feedback_gid) if feedback_gid else None
+        feedback_text = ""
+        if feedback_raw is not None:
+            if isinstance(feedback_raw, str):
+                feedback_text = feedback_raw.strip()
+            else:
+                feedback_text = str(feedback_raw).strip()
+
         # Respondent identity — used for matching against existing nominations + creating one if missing
         assignee = task.get("assignee") or {}
         email = (assignee.get("email") or "").lower()
@@ -386,7 +397,7 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
             nps_score=score,
             category=category,
             leader=leader,
-            feedback_text="",
+            feedback_text=feedback_text,
             recorded_at=recorded_at,
         )
         if dry_run:
