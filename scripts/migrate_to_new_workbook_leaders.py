@@ -69,6 +69,38 @@ def _norm_name(s: str) -> str:
     return " ".join((s or "").lower().split())
 
 
+def _name_tokens(s: str) -> set[str]:
+    """Token set for fuzzy name matching (handles 'Alex' vs 'Alexander')."""
+    raw = _norm_name(s)
+    return {t for t in raw.replace(",", " ").split() if t}
+
+
+def _names_likely_same(a: str, b: str) -> bool:
+    """Loose match: same name if every short-name token is substring of a
+    long-name token in the other string, OR they share 2+ tokens.
+
+    Examples:
+      'Alex Kraemer' ~ 'Alexander Kraemer'      -> True (alex in alexander, kraemer ==)
+      'Ganesh Kumar' ~ 'Ganesh Kumar Subramanian'-> True (2+ shared tokens)
+      'Alice Smith' ~ 'Bob Jones'              -> False
+    """
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return False
+    if _norm_name(a) == _norm_name(b):
+        return True
+    # 2+ shared tokens (handles middle name / suffix differences)
+    if len(ta & tb) >= 2:
+        return True
+    # Each token in the smaller set is substring of some token in the larger
+    small, large = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return all(any(s in lg or lg in s for lg in large) for s in small)
+
+
+SYNTH_PREFIX = "asana-task-"
+SYNTH_DOMAIN = "@unknown.local"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workbook", type=Path, required=True)
@@ -91,6 +123,7 @@ def main() -> None:
     seen_pairs: set[tuple[str, str]] = set()
     email_to_leaders: dict[str, list[str]] = {}  # email -> [leaders]
     name_to_email: dict[str, str] = {}
+    name_keys_in_wb: list[tuple[str, str]] = []  # (raw_name, email)
     for row in yes_rows:
         alias = row["stakeholder_alias"]
         if not alias:
@@ -113,6 +146,11 @@ def main() -> None:
         email_to_leaders.setdefault(email, []).append(leader)
         if row["stakeholder"]:
             name_to_email.setdefault(_norm_name(row["stakeholder"]), email)
+            name_keys_in_wb.append((row["stakeholder"], email))
+
+    # Set of all leader names that appear in the workbook — used to detect
+    # leader self-noms with fuzzy matching.
+    workbook_leaders: set[str] = {t["leader"] for t in workbook_targets}
 
     workbook_pairs = {(t["email"], t["leader"]) for t in workbook_targets}
     logger.info("[%s] workbook targets: %d, unique emails: %d",
@@ -126,7 +164,9 @@ def main() -> None:
     # --- plan nomination changes -----------------------------------------
 
     plan_keep: list[Nomination] = []          # already correct
-    plan_retag: list[tuple[Nomination, str]] = []  # (old, new_leader)
+    # plan_retag entries are EITHER (old_nom, new_leader) — keep email — OR
+    # (old_nom, new_leader, new_base_email) — rewrite email AND leader.
+    plan_retag: list[tuple] = []
     plan_offlist_keep: list[Nomination] = []  # responded=True, not in WB
     plan_drop: list[Nomination] = []          # responded=False, not in WB
     plan_self_drop: list[Nomination] = []     # name == leader
@@ -137,8 +177,14 @@ def main() -> None:
         cur_leader = _norm_leader_name((n.leader or "").strip())
         nom_name = _norm_name(n.name)
 
-        # Self-nom: name == leader, never legitimate -> drop
-        if nom_name and nom_name == _norm_name(cur_leader):
+        # Self-nom: name resembles ANY workbook leader (fuzzy match catches
+        # 'Alex Kraemer' nom under 'Alexander Kraemer' leader).
+        is_self_nom = False
+        for wl in {cur_leader, *workbook_leaders}:
+            if wl and _names_likely_same(n.name, wl):
+                is_self_nom = True
+                break
+        if is_self_nom:
             plan_self_drop.append(n)
             continue
 
@@ -160,9 +206,40 @@ def main() -> None:
                 plan_drop.append(n)
             continue
 
-        # Email not in workbook at all
+        # Email not in workbook directly. Try to match by NAME — synthetic
+        # rows ('asana-task-...@unknown.local') and other off-list rows
+        # often share a name with a workbook person who responded under a
+        # different leader. If so, retag the synthetic into the workbook
+        # person's email + leader. Otherwise it's a true off-list response.
+        is_synthetic = (n.email.startswith(SYNTH_PREFIX)
+                        and SYNTH_DOMAIN in n.email)
+        wb_email_for_name: str | None = None
+        for wb_name, wb_email in name_keys_in_wb:
+            if _names_likely_same(n.name, wb_name):
+                wb_email_for_name = wb_email
+                break
+
+        if wb_email_for_name and n.responded:
+            # If their CURRENT leader matches one of the workbook leaders
+            # for that email, retag to that leader. Otherwise, retag to the
+            # first workbook leader.
+            wb_leaders = email_to_leaders.get(wb_email_for_name, [])
+            target_leader = wb_leaders[0] if wb_leaders else cur_leader
+            for wl in wb_leaders:
+                if _norm_leader_name(wl) == cur_leader:
+                    target_leader = wl
+                    break
+            # Use a synthetic-marker tuple so the apply step knows to
+            # rewrite the email AND the leader.
+            plan_retag.append((n, target_leader, wb_email_for_name))  # type: ignore[arg-type]
+            continue
+
+        # No name match either - true off-list responder or junk
         if n.responded:
             plan_offlist_keep.append(n)
+        elif is_synthetic:
+            # Synthetic + not responded + no match — junk row, drop
+            plan_drop.append(n)
         else:
             plan_drop.append(n)
 
@@ -172,10 +249,13 @@ def main() -> None:
          _norm_leader_name((n.leader or "").strip()))
         for n in plan_keep
     }
-    covered_pairs.update(
-        (base_email(n.email).strip().lower(), new_leader)
-        for n, new_leader in plan_retag
-    )
+    for entry in plan_retag:
+        if len(entry) == 2:
+            old_nom, new_leader = entry
+            new_be = base_email(old_nom.email).strip().lower()
+        else:
+            old_nom, new_leader, new_be = entry
+        covered_pairs.add((new_be, _norm_leader_name(new_leader)))
     for t in workbook_targets:
         if (t["email"], t["leader"]) not in covered_pairs:
             plan_add.append(t)
@@ -185,9 +265,15 @@ def main() -> None:
                 args.org, len(plan_keep), len(plan_retag), len(plan_offlist_keep),
                 len(plan_drop), len(plan_self_drop), len(plan_add))
 
-    for n, new_leader in plan_retag:
-        logger.info("  RETAG: email=%s name='%s' leader='%s' -> '%s'",
-                    n.email, n.name, n.leader, new_leader)
+    for entry in plan_retag:
+        if len(entry) == 2:
+            n, new_leader = entry
+            logger.info("  RETAG: email=%s name='%s' leader='%s' -> '%s'",
+                        n.email, n.name, n.leader, new_leader)
+        else:
+            n, new_leader, new_be = entry
+            logger.info("  RETAG (rewrite email): %s -> %s, leader='%s' -> '%s' (name='%s')",
+                        n.email, new_be, n.leader, new_leader, n.name)
     for n in plan_drop:
         logger.info("  DROP (orphan, not in WB): email=%s name='%s' leader='%s' responded=%s",
                     n.email, n.name, n.leader, n.responded)
@@ -209,6 +295,13 @@ def main() -> None:
         # Try to map this response back to a workbook entry by name.
         rname = _norm_name(r.respondent_name)
         be = name_to_email.get(rname) if rname else None
+        if not be:
+            # Fuzzy fallback for spelling differences ('Ganesh Kumar Subramanian'
+            # vs workbook's 'Ganesh Kumar').
+            for wb_name, wb_email in name_keys_in_wb:
+                if _names_likely_same(r.respondent_name, wb_name):
+                    be = wb_email
+                    break
         if not be:
             # Can't map - leave the leader as-is.
             continue
@@ -248,12 +341,16 @@ def main() -> None:
         if n.email:
             taken_keys.add(n.email.strip().lower())
 
-    for old, new_leader in plan_retag:
+    for entry in plan_retag:
+        if len(entry) == 2:
+            old, new_leader = entry
+            new_be = base_email(old.email).strip().lower()
+        else:
+            old, new_leader, new_be = entry
         nps_nomination_repo.delete_nomination(args.org, args.cycle, old.email)
-        be = base_email(old.email).strip().lower()
         # Free up the old key if it was the plain email
         taken_keys.discard(old.email.strip().lower())
-        new_key = encode_for_leader(be, new_leader, taken_keys)
+        new_key = encode_for_leader(new_be, new_leader, taken_keys)
         new_nom = Nomination(
             org_id=old.org_id,
             cycle_id=old.cycle_id,
