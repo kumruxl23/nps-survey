@@ -249,13 +249,49 @@ def main() -> None:
          _norm_leader_name((n.leader or "").strip()))
         for n in plan_keep
     }
-    for entry in plan_retag:
+
+    # Dedup retag entries that resolve to the same (target_email, target_leader).
+    # A synthetic row + a real-email row can both fuzzy-match into the same
+    # workbook pair — keep the real-email source, drop the synthetic.
+    def _retag_target(entry):
         if len(entry) == 2:
-            old_nom, new_leader = entry
-            new_be = base_email(old_nom.email).strip().lower()
+            old, new_leader = entry
+            new_be = base_email(old.email).strip().lower()
         else:
-            old_nom, new_leader, new_be = entry
-        covered_pairs.add((new_be, _norm_leader_name(new_leader)))
+            old, new_leader, new_be = entry
+        return (new_be, _norm_leader_name(new_leader))
+
+    deduped_retag: list[tuple] = []
+    by_target: dict[tuple[str, str], tuple] = {}
+    for entry in plan_retag:
+        target = _retag_target(entry)
+        existing_entry = by_target.get(target)
+        if existing_entry is None:
+            by_target[target] = entry
+            continue
+        # Pick the real-email source over synthetic; if both real, keep
+        # the first one (deterministic).
+        cur_old = existing_entry[0]
+        new_old = entry[0]
+        cur_is_synth = (cur_old.email.startswith(SYNTH_PREFIX)
+                        and SYNTH_DOMAIN in cur_old.email)
+        new_is_synth = (new_old.email.startswith(SYNTH_PREFIX)
+                        and SYNTH_DOMAIN in new_old.email)
+        if cur_is_synth and not new_is_synth:
+            # Drop the synth, keep the real
+            plan_drop.append(cur_old)
+            by_target[target] = entry
+        else:
+            # Keep what we already have, drop the new one
+            plan_drop.append(new_old)
+    deduped_retag = list(by_target.values())
+    if len(deduped_retag) < len(plan_retag):
+        logger.info("[%s] retag dedup: %d -> %d (collisions on same target pair)",
+                    args.org, len(plan_retag), len(deduped_retag))
+    plan_retag = deduped_retag
+
+    for entry in plan_retag:
+        covered_pairs.add(_retag_target(entry))
     for t in workbook_targets:
         if (t["email"], t["leader"]) not in covered_pairs:
             plan_add.append(t)
