@@ -364,30 +364,36 @@ def main() -> None:
         return
 
     # --- apply ------------------------------------------------------------
+    #
+    # Order matters: do ALL deletes before ANY puts. Otherwise an interleaved
+    # apply can delete a row we just wrote — e.g. when synthetic 'jsarreal@'
+    # retag claims plain 'jsarreal@amazon.com' and the next retag's delete
+    # of the SAME email wipes our just-written row.
 
-    # Drop self-noms and orphans first (free up keys)
+    # 1. Collect every key that will be deleted
+    keys_to_delete: list[str] = []
     for n in plan_drop + plan_self_drop:
-        nps_nomination_repo.delete_nomination(args.org, args.cycle, n.email)
+        keys_to_delete.append(n.email)
+    for entry in plan_retag:
+        old = entry[0]
+        keys_to_delete.append(old.email)
 
-    # Re-tag: delete old row, write new with possibly-new sort-key.
-    # Build the running "taken_keys" set from rows we're keeping +
-    # off-list keeps so encode_for_leader can pick a unique key.
+    # 2. Build the put list (resolve sort-keys against a taken_keys set
+    # that reflects the post-delete state).
     taken_keys: set[str] = set()
     for n in plan_keep + plan_offlist_keep:
         if n.email:
             taken_keys.add(n.email.strip().lower())
 
+    puts: list[Nomination] = []
     for entry in plan_retag:
         if len(entry) == 2:
             old, new_leader = entry
             new_be = base_email(old.email).strip().lower()
         else:
             old, new_leader, new_be = entry
-        nps_nomination_repo.delete_nomination(args.org, args.cycle, old.email)
-        # Free up the old key if it was the plain email
-        taken_keys.discard(old.email.strip().lower())
         new_key = encode_for_leader(new_be, new_leader, taken_keys)
-        new_nom = Nomination(
+        puts.append(Nomination(
             org_id=old.org_id,
             cycle_id=old.cycle_id,
             email=new_key,
@@ -397,13 +403,11 @@ def main() -> None:
             responded=old.responded,
             responded_at=old.responded_at,
             created_at=old.created_at,
-        )
-        nps_nomination_repo.put_nomination(new_nom)
+        ))
 
-    # Add new workbook rows
     for t in plan_add:
         new_key = encode_for_leader(t["email"], t["leader"], taken_keys)
-        nom = Nomination(
+        puts.append(Nomination(
             org_id=args.org,
             cycle_id=args.cycle,
             email=new_key,
@@ -412,7 +416,12 @@ def main() -> None:
             responded=t["responded_flag"],
             responded_at=(datetime.now(timezone.utc).isoformat()
                           if t["responded_flag"] else ""),
-        )
+        ))
+
+    # 3. Apply: deletes first, then puts.
+    for key in keys_to_delete:
+        nps_nomination_repo.delete_nomination(args.org, args.cycle, key)
+    for nom in puts:
         nps_nomination_repo.put_nomination(nom)
 
     # Re-tag responses
