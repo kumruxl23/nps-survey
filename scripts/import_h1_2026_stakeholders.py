@@ -297,10 +297,14 @@ def import_nominations(
             logger.debug("[%s] no stakeholder-list email for alias '%s', constructed '%s'",
                          org_id, alias, email)
 
-        if sh and sh.get("leader"):
-            leader = sh["leader"]
-        else:
-            leader = row["poc"]
+        # Leader source of truth = H1 2026 sheet's POC column. The
+        # Stakeholder List sheet only carries one leader per alias, which
+        # silently collapses shared stakeholders (e.g. Karthik Rao under
+        # both Abhas Rao AND Indrajeet Roy in cpt_in). The H1 sheet
+        # encodes the multi-leader truth via duplicate rows with
+        # different POC values.
+        leader = row["poc"] or (sh.get("leader") if sh else "")
+        if not leader and sh and sh.get("leader"):
             stats["fallback_leader_from_poc"] += 1
 
         pair = (email, leader)

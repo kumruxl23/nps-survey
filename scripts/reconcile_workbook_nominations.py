@@ -81,8 +81,15 @@ def _build_workbook_targets(workbook: Path, org: str) -> list[dict]:
             continue
         sh = sh_map.get(alias) or {}
         email = (sh.get("email") or f"{alias}@amazon.com").strip().lower()
-        leader = sh.get("leader") or row["poc"]
-        leader = _norm_leader_name(leader)
+        # Leader comes from the H1 2026 sheet's POC column — that's the
+        # source of truth for which leader nominated this stakeholder.
+        # Stakeholder List's leader column only carries ONE leader per
+        # alias, so using it would collapse shared stakeholders that
+        # legitimately appear under multiple POCs.
+        leader_raw = row["poc"] or sh.get("leader") or ""
+        leader = _norm_leader_name(leader_raw)
+        if not leader:
+            continue
         pair = (email, leader)
         if pair in seen_pairs:
             continue
