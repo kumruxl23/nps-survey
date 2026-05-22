@@ -1,33 +1,23 @@
-"""Prune nominations that aren't on the targeted-list workbook.
+"""Prune nominations not on the targeted-list workbook.
 
-Why: the backfill script (see scripts/backfill_from_asana.py) auto-adds a
-Nomination row for every Asana responder, even those who weren't on the
-workbook's "Yes for H1 2026" list. That inflates the dashboard's
-'Nominated' count beyond the workbook's intent.
+⚠️ DEPRECATED as of the multi-leader rules (May 2026). New product rule:
+   off-list responders are legitimate nominations (rule 3) and should NOT
+   be pruned. Don't run this script unless you specifically want to drop
+   nominations whose ``(base_email, leader)`` pair isn't in the workbook.
 
-This script reconciles by deleting nominations whose email isn't in the
-workbook's targeted list, while leaving the corresponding NpsResponse
-rows untouched (their feedback is still real signal).
-
-Usage on the EC2:
+Usage on the EC2 (when you really want to run it):
 
     /usr/bin/python3.11 scripts/prune_extra_nominations.py \\
         --workbook /tmp/stakeholders.xlsx \\
         --org whs_cpt_in --cycle h1-2026 --dry-run
 
-    /usr/bin/python3.11 scripts/prune_extra_nominations.py \\
-        --workbook /tmp/fec.xlsx --org fec --cycle h1-2026 --dry-run
-
-    /usr/bin/python3.11 scripts/prune_extra_nominations.py \\
-        --workbook /tmp/cpt_na.xlsx --org whs_cpt_na --cycle h1-2026 --dry-run
-
 Drop --dry-run to actually delete.
 
 Safety:
-  - Refuses to run if the targeted-list parse returns 0 rows (catches
-    workbook path / sheet name mistakes before any deletion).
-  - Only ever deletes from NpsNominations. Never touches NpsResponses
-    or any other table.
+  - Refuses to run if the targeted-list parse returns 0 rows.
+  - Only ever deletes from NpsNominations. Never touches NpsResponses.
+  - Compares by ``(base_email, leader)`` so multi-leader rows count
+    distinctly.
 """
 
 from __future__ import annotations
@@ -43,6 +33,7 @@ os.environ.setdefault("AWS_REGION", "ap-south-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
 
 from app.db import nps_nomination_repo  # noqa: E402
+from app.services.nomination_keys import base_email  # noqa: E402
 
 # Reuse the import script's parsing so we get exactly the same "yes" set.
 from scripts.import_h1_2026_stakeholders import (  # noqa: E402
@@ -55,12 +46,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("prune")
 
 
-def workbook_email_set(workbook_path: Path, org_id: str) -> set[str]:
-    """Return the set of emails (lowercased) on the workbook's targeted list."""
+def workbook_pairs(workbook_path: Path, org_id: str) -> set[tuple[str, str]]:
+    """Return the set of ``(email, leader)`` pairs on the workbook's targeted list.
+
+    Multi-leader: if a stakeholder appears under 2 leaders, we get 2 pairs.
+    """
     cfg = ORG_CONFIGS[org_id]
     yes_rows = _parse_h1_2026(workbook_path, cfg)
     sh_map = _parse_stakeholder_list(workbook_path, cfg)
-    out: set[str] = set()
+    out: set[tuple[str, str]] = set()
     for row in yes_rows:
         alias = row["stakeholder_alias"]
         if not alias:
@@ -69,7 +63,10 @@ def workbook_email_set(workbook_path: Path, org_id: str) -> set[str]:
         email = (sh or {}).get("email") if sh else ""
         if not email:
             email = f"{alias}@amazon.com"
-        out.add(email.strip().lower())
+        leader = (sh or {}).get("leader") if sh else ""
+        if not leader:
+            leader = row["poc"]
+        out.add((email.strip().lower(), (leader or "").strip()))
     return out
 
 
@@ -87,18 +84,25 @@ def main() -> None:
     if not args.workbook.is_file():
         sys.exit(f"Workbook not found: {args.workbook}")
 
-    targeted = workbook_email_set(args.workbook, args.org)
-    if not targeted:
-        sys.exit(f"Workbook returned 0 targeted emails — refusing to delete anything. "
-                 f"Check workbook path / sheet structure for org='{args.org}'.")
+    targeted_pairs = workbook_pairs(args.workbook, args.org)
+    if not targeted_pairs:
+        sys.exit(f"Workbook returned 0 targeted (email, leader) pairs — refusing "
+                 f"to delete anything. Check workbook path / sheet structure for "
+                 f"org='{args.org}'.")
 
-    logger.info("[%s] %d targeted emails parsed from workbook.", args.org, len(targeted))
+    logger.info("[%s] %d targeted (email, leader) pairs parsed from workbook.",
+                args.org, len(targeted_pairs))
 
     nominations = nps_nomination_repo.list_nominations(args.org, args.cycle)
     logger.info("[%s] %d nominations currently in DynamoDB for cycle '%s'.",
                 args.org, len(nominations), args.cycle)
 
-    extras = [n for n in nominations if n.email.strip().lower() not in targeted]
+    extras = []
+    for n in nominations:
+        pair = (base_email(n.email).strip().lower(), (n.leader or "").strip())
+        if pair not in targeted_pairs:
+            extras.append(n)
+
     logger.info("[%s] %d nominations are NOT on the targeted list and will be pruned.",
                 args.org, len(extras))
 

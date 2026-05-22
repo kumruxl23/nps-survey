@@ -23,6 +23,7 @@ from app.db.models import (
 )
 from app.services import email_client, nps_nomination_service, nps_org_config_service
 from app.services import slack_client
+from app.services.nomination_keys import base_email
 from app.services.slack_client import SlackUserNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -191,7 +192,9 @@ def send_reminder(
 
     # --- Email channel ---
     if "email" in channels:
-        bcc_recipients = [n.email for n in non_respondents]
+        # Dedup by base email so a shared stakeholder (multiple nomination
+        # rows due to multi-leader encoding) only gets one reminder.
+        bcc_recipients = sorted({base_email(n.email) for n in non_respondents if n.email})
         body = _build_reminder_body(form_url)
         email_result = email_client.send_bcc_email(
             subject=_REMINDER_SUBJECT,
@@ -226,12 +229,15 @@ def send_reminder(
             )
         else:
             for nomination in non_respondents:
+                # Slack lookup needs the deliverable email, not the
+                # multi-leader-suffixed one stored on the row.
+                lookup_email = base_email(nomination.email)
                 # Resolve Slack user ID (use cached value if available)
                 slack_user_id = nomination.slack_user_id
                 if not slack_user_id:
                     try:
                         slack_user_id = slack_client.lookup_user_by_email(
-                            nomination.email, bot_token
+                            lookup_email, bot_token
                         )
                         # Cache the resolved ID on the nomination
                         nps_nomination_repo.update_nomination(
@@ -242,8 +248,8 @@ def send_reminder(
                         _log_failure(
                             org_id=org_id,
                             cycle_id=cycle_id,
-                            email=nomination.email,
-                            error_reason=f"Slack user not found for email: {nomination.email}",
+                            email=lookup_email,
+                            error_reason=f"Slack user not found for email: {lookup_email}",
                             event_type="reminder",
                             channel="slack",
                         )
@@ -253,7 +259,7 @@ def send_reminder(
                         _log_failure(
                             org_id=org_id,
                             cycle_id=cycle_id,
-                            email=nomination.email,
+                            email=lookup_email,
                             error_reason=str(exc),
                             event_type="reminder",
                             channel="slack",
@@ -269,7 +275,7 @@ def send_reminder(
                     _log_failure(
                         org_id=org_id,
                         cycle_id=cycle_id,
-                        email=nomination.email,
+                        email=lookup_email,
                         error_reason=dm_result.error or "Unknown Slack error",
                         event_type="reminder",
                         channel="slack",
@@ -339,7 +345,13 @@ def send_targeted_reminder(
 
     target_set = {e.strip().lower() for e in emails if e and e.strip()}
     all_pending = nps_nomination_service.get_reminder_list(org_id, cycle_id)
-    targets = [n for n in all_pending if n.email.lower() in target_set]
+    # Match either by suffixed key (used by per-leader send) or by base email
+    # (used by per-stakeholder send) so the caller doesn't have to know the
+    # internal multi-leader encoding.
+    targets = [
+        n for n in all_pending
+        if n.email.lower() in target_set or base_email(n.email).lower() in target_set
+    ]
     if not targets:
         return ReminderResult()
 
@@ -351,7 +363,9 @@ def send_targeted_reminder(
 
     # --- Email channel ---
     if "email" in channels:
-        bcc = [n.email for n in targets]
+        # Dedup so a shared stakeholder (multiple nominations under different
+        # leaders) only receives one email.
+        bcc = sorted({base_email(n.email) for n in targets if n.email})
         body = _build_reminder_body(form_url)
         email_result = email_client.send_bcc_email(
             subject=_REMINDER_SUBJECT,
@@ -385,25 +399,26 @@ def send_targeted_reminder(
             )
         else:
             for nom in targets:
+                lookup_email = base_email(nom.email)
                 slack_user_id = nom.slack_user_id
                 if not slack_user_id:
                     try:
-                        slack_user_id = slack_client.lookup_user_by_email(nom.email, bot_token)
+                        slack_user_id = slack_client.lookup_user_by_email(lookup_email, bot_token)
                         nps_nomination_repo.update_nomination(
                             org_id, cycle_id, nom.email,
                             slack_user_id=slack_user_id,
                         )
                     except SlackUserNotFoundError:
                         _log_failure(
-                            org_id=org_id, cycle_id=cycle_id, email=nom.email,
-                            error_reason=f"Slack user not found for email: {nom.email}",
+                            org_id=org_id, cycle_id=cycle_id, email=lookup_email,
+                            error_reason=f"Slack user not found for email: {lookup_email}",
                             event_type="reminder", channel="slack",
                         )
                         failed_count += 1
                         continue
                     except RuntimeError as exc:
                         _log_failure(
-                            org_id=org_id, cycle_id=cycle_id, email=nom.email,
+                            org_id=org_id, cycle_id=cycle_id, email=lookup_email,
                             error_reason=str(exc),
                             event_type="reminder", channel="slack",
                         )
@@ -415,7 +430,7 @@ def send_targeted_reminder(
                     result.slack_sent_count += 1
                 else:
                     _log_failure(
-                        org_id=org_id, cycle_id=cycle_id, email=nom.email,
+                        org_id=org_id, cycle_id=cycle_id, email=lookup_email,
                         error_reason=dm_result.error or "Unknown Slack error",
                         event_type="reminder", channel="slack",
                     )

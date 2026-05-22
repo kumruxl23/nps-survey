@@ -596,10 +596,11 @@
         <div class="card-body p-0"><table class="table table-sm mb-0">
         <thead class="table-light"><tr>
           <th style="width:80px;" class="text-center">Score</th>
-          <th style="width:200px;">Stakeholder</th>
+          <th style="width:160px;">Stakeholder</th>
           <th>Feedback</th>
-          <th style="width:120px;" class="text-nowrap">Date</th>
-          <th style="width:240px;">Admin comment</th>
+          <th>What was missing</th>
+          <th style="width:110px;" class="text-nowrap">Date</th>
+          <th style="width:220px;">Admin comment</th>
         </tr></thead><tbody>`;
       for(const r of items){
         const date=(r.recorded_at||'').slice(0,10);
@@ -607,6 +608,7 @@
         const catColor=cat==='Promoter'?'text-success':(cat==='Passive'?'text-warning':'text-danger');
         const comment=_esc(r.admin_comment||'');
         const feedbackText=_esc(r.feedback_text||'');
+        const whatMissing=_esc(r.what_missing_text||'');
         const respondent=_esc(r.respondent_name||'');
         h+=`<tr>
           <td class="text-center">
@@ -615,6 +617,7 @@
           </td>
           <td>${respondent||'<em class="text-muted">unknown</em>'}</td>
           <td>${feedbackText||'<em class="text-muted">No comment</em>'}</td>
+          <td>${whatMissing||'<em class="text-muted">—</em>'}</td>
           <td class="text-nowrap small text-muted">${date}</td>
           <td>
             <div class="d-flex gap-1">

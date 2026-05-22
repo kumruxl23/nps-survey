@@ -426,8 +426,19 @@ def list_pending_stakeholders():
     if leader_filter:
         pending = [n for n in pending if (n.leader or "") == leader_filter]
 
+    # Strip multi-leader suffix from the displayed email so the UI shows
+    # the deliverable address. The internal sort-key (with suffix) is
+    # passed through as `nomination_key` for callers that need to send
+    # to that specific leader-relationship.
+    from app.services.nomination_keys import base_email
+
     return jsonify([
-        {"email": n.email, "name": n.name, "leader": n.leader or ""}
+        {
+            "email": base_email(n.email),
+            "nomination_key": n.email,
+            "name": n.name,
+            "leader": n.leader or "",
+        }
         for n in pending
     ])
 
@@ -524,6 +535,7 @@ def list_responses_for_dashboard():
             "nps_score": r.nps_score,
             "category": r.category,
             "feedback_text": r.feedback_text or "",
+            "what_missing_text": getattr(r, "what_missing_text", "") or "",
             "recorded_at": r.recorded_at or "",
             "admin_comment": getattr(r, "admin_comment", "") or "",
         }

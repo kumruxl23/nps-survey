@@ -50,6 +50,7 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
 
 from app.db import nps_cycle_repo, nps_nomination_repo  # noqa: E402
 from app.db.models import Nomination  # noqa: E402
+from app.services.nomination_keys import encode_for_leader  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("import_stakeholders")
@@ -216,6 +217,32 @@ def _parse_stakeholder_list(workbook_path: Path, cfg: dict) -> dict[str, dict]:
     return by_alias
 
 
+# Helpers for multi-leader encoding -----------------------------------------
+# When the same stakeholder is nominated by multiple leaders, we need
+# multiple Nomination rows. The DynamoDB sort key is `email`, so for the
+# 2nd, 3rd, ... leader of a shared stakeholder we suffix the email with
+# `#<leader-name>` to keep keys unique. Always: the FIRST leader gets
+# the plain email; later ones get the suffix. Reminder dispatch strips
+# suffixes before sending so the human only gets one email.
+
+NOM_SUFFIX_SEP = "#"
+
+
+def encode_nomination_email(email: str, leader: str, taken_keys: set[str]) -> str:
+    """Pick a unique sort-key for a nomination row (deprecated wrapper).
+
+    Use ``app.services.nomination_keys.encode_for_leader`` going forward.
+    """
+    return encode_for_leader(email, leader, taken_keys)
+
+
+def decode_nomination_email(suffixed: str) -> str:
+    """Strip the ``#leader`` suffix to recover the human-deliverable email."""
+    if not suffixed:
+        return suffixed
+    return suffixed.split(NOM_SUFFIX_SEP, 1)[0]
+
+
 def import_nominations(
     workbook_path: Path,
     org_id: str,
@@ -232,6 +259,7 @@ def import_nominations(
         "fallback_email_constructed": 0,
         "fallback_leader_from_poc": 0,
         "nominations_written": 0,
+        "shared_with_suffix": 0,
     }
 
     yes_rows = _parse_h1_2026(workbook_path, cfg)
@@ -241,7 +269,6 @@ def import_nominations(
     logger.info("[%s] Loaded %d entries from %s",
                 org_id, len(stakeholder_map), cfg["stakeholder_list_sheet_name"])
 
-    # Verify cycle exists; if not, create it (closed-by-default for safety).
     existing_cycle = nps_cycle_repo.get_cycle(org_id, cycle_id)
     if not existing_cycle:
         logger.warning("[%s] cycle %s does not exist. Run backfill_from_asana --backfill "
@@ -249,7 +276,11 @@ def import_nominations(
                        org_id, cycle_id)
         return stats
 
-    seen_emails: set[str] = set()
+    # Track which (email, leader) pairs we've already written so we don't
+    # double-import the *same* relationship if the workbook duplicates a row
+    # by accident, while still allowing the same email under DIFFERENT leaders.
+    taken_keys: set[str] = set()
+    seen_pairs: set[tuple[str, str]] = set()
 
     for row in yes_rows:
         alias = row["stakeholder_alias"]
@@ -258,7 +289,7 @@ def import_nominations(
 
         sh = stakeholder_map.get(alias)
         if sh and sh.get("email"):
-            email = sh["email"]
+            email = sh["email"].strip().lower()
             stats["matched_in_stakeholder_list"] += 1
         else:
             email = f"{alias}@amazon.com"
@@ -266,23 +297,29 @@ def import_nominations(
             logger.debug("[%s] no stakeholder-list email for alias '%s', constructed '%s'",
                          org_id, alias, email)
 
-        # Leader resolution: Stakeholder List (if present) wins over H1 2026 sheet's POC.
-        # The "leader" concept matters most on FEC/CPT-NA where POC != Leader.
         if sh and sh.get("leader"):
             leader = sh["leader"]
         else:
             leader = row["poc"]
             stats["fallback_leader_from_poc"] += 1
 
-        if email in seen_emails:
-            logger.debug("[%s] duplicate email %s, skipping", org_id, email)
+        pair = (email, leader)
+        if pair in seen_pairs:
+            logger.debug("[%s] duplicate (email, leader) pair %s, skipping", org_id, pair)
             continue
-        seen_emails.add(email)
+        seen_pairs.add(pair)
+
+        # Multi-leader encoding: same email under a *different* leader gets
+        # the `#leader` suffix to keep DynamoDB keys unique.
+        was_already_taken = email in taken_keys
+        nomination_email = encode_for_leader(email, leader, taken_keys)
+        if was_already_taken:
+            stats["shared_with_suffix"] += 1
 
         nomination = Nomination(
             org_id=org_id,
             cycle_id=cycle_id,
-            email=email,
+            email=nomination_email,
             name=row["stakeholder"],
             leader=leader,
             responded=(row["responded"] == "yes"),

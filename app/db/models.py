@@ -73,7 +73,9 @@ class NpsResponse:
     anonymity. From May 2026 we record ``respondent_name`` so admins can
     follow up with low-scorers; visibility will be gated behind SSO-based
     role permissions in a follow-up. ``feedback_text`` is the free-form
-    written feedback (Asana's ``Feedback`` custom field).
+    written feedback (Asana's ``Feedback`` custom field); ``what_missing_text``
+    is the separate "What was missing" custom field — kept distinct so the
+    UI can show them in their own columns.
     """
 
     org_id: str
@@ -83,6 +85,7 @@ class NpsResponse:
     category: NpsCategory
     leader: str = ""  # leader this response is tagged against
     feedback_text: str = ""
+    what_missing_text: str = ""
     respondent_name: str = ""
     recorded_at: str = ""
     admin_comment: str = ""  # internal note added by admins/editors after the fact

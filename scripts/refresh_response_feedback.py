@@ -101,11 +101,11 @@ def main() -> None:
     tasks = asana_client.list_tasks_in_section(target["gid"])
     logger.info("[%s] %d tasks in section '%s'", args.org, len(tasks), target.get("name"))
 
-    # Build a lookup of (score, leader, day) -> [(feedback_text, respondent_name), ...]
+    # Build a lookup of (score, leader, day) -> [(feedback_text, what_missing_text, respondent_name), ...]
     # Plus a day-agnostic fallback (score, leader) -> [...] for matching when
     # the recorded date drifted between Asana and DynamoDB.
-    asana_lookup: dict[tuple[int, str, str], list[tuple[str, str]]] = defaultdict(list)
-    asana_lookup_no_day: dict[tuple[int, str], list[tuple[str, str]]] = defaultdict(list)
+    asana_lookup: dict[tuple[int, str, str], list[tuple[str, str, str]]] = defaultdict(list)
+    asana_lookup_no_day: dict[tuple[int, str], list[tuple[str, str, str]]] = defaultdict(list)
     for task in tasks:
         score = _parse_score(_custom_field_value(task, nps_gid))
         if score is None:
@@ -113,18 +113,19 @@ def main() -> None:
         leader_raw = _custom_field_value(task, leader_gid) if leader_gid else None
         leader = (leader_raw or "").strip() if isinstance(leader_raw, str) else ""
 
-        # Combine Feedback + What was missing — same logic as backfill_from_asana.
-        parts: list[str] = []
-        for gid in (feedback_gid, what_missing_gid):
-            if not gid:
-                continue
-            raw = _custom_field_value(task, gid)
-            if raw is None:
-                continue
-            txt = str(raw).strip() if not isinstance(raw, str) else raw.strip()
-            if txt and txt.lower() not in ("see above", "n/a", "na", "none"):
-                parts.append(txt)
-        feedback_text = "\n\n".join(parts)
+        # Read Feedback and What was missing as separate fields (kept distinct
+        # in the response model so the UI can show them in their own columns).
+        feedback_text = ""
+        if feedback_gid:
+            raw = _custom_field_value(task, feedback_gid)
+            if raw is not None:
+                feedback_text = (str(raw) if not isinstance(raw, str) else raw).strip()
+
+        what_missing_text = ""
+        if what_missing_gid:
+            raw = _custom_field_value(task, what_missing_gid)
+            if raw is not None:
+                what_missing_text = (str(raw) if not isinstance(raw, str) else raw).strip()
 
         # Pull the respondent name from "<Leader>, <Stakeholder>" task title
         full_name = (task.get("name") or "").strip()
@@ -137,10 +138,11 @@ def main() -> None:
         # Index every task — even ones with empty feedback — so we can fill in
         # the respondent name on responses that previously had no match.
         day = (task.get("completed_at") or task.get("created_at") or "")[:10]
-        asana_lookup[(score, leader, day)].append((feedback_text, respondent_name))
-        asana_lookup_no_day[(score, leader)].append((feedback_text, respondent_name))
+        triple = (feedback_text, what_missing_text, respondent_name)
+        asana_lookup[(score, leader, day)].append(triple)
+        asana_lookup_no_day[(score, leader)].append(triple)
 
-    feedback_count = sum(1 for v in asana_lookup.values() for f, _ in v if f)
+    feedback_count = sum(1 for v in asana_lookup.values() for f, _, _ in v if f)
     logger.info("[%s] %d Asana tasks have non-empty feedback", args.org, feedback_count)
 
     # Walk existing responses, update feedback_text where empty + a match exists
@@ -158,10 +160,11 @@ def main() -> None:
     remaining_loose = {k: list(v) for k, v in asana_lookup_no_day.items()}
 
     for r in responses:
-        # Skip rows that already have BOTH feedback and respondent_name set.
+        # Skip rows that already have feedback, what_missing, AND respondent_name.
         had_feedback = bool((r.feedback_text or "").strip())
+        had_missing = bool((getattr(r, "what_missing_text", "") or "").strip())
         had_name = bool((getattr(r, "respondent_name", "") or "").strip())
-        if had_feedback and had_name:
+        if had_feedback and had_missing and had_name:
             skipped_already_set += 1
             continue
         day = (r.recorded_at or "")[:10]
@@ -169,7 +172,6 @@ def main() -> None:
         choices = remaining.get(key, [])
         loose_used = False
         if not choices:
-            # Day didn't line up. Fall back to (score, leader) only.
             loose_key = (int(r.nps_score), r.leader or "")
             choices = remaining_loose.get(loose_key, [])
             loose_used = bool(choices)
@@ -182,29 +184,29 @@ def main() -> None:
         if loose_used:
             matched_loose += 1
 
-        feedback_text, respondent_name = choices.pop(0)
-        # Also remove from the strict lookup so we don't double-use
+        feedback_text, what_missing_text, respondent_name = choices.pop(0)
         if not loose_used:
-            # Already came from `remaining`; keep loose in sync by best-effort
             loose_key = (int(r.nps_score), r.leader or "")
             for i, item in enumerate(remaining_loose.get(loose_key, [])):
-                if item == (feedback_text, respondent_name):
+                if item == (feedback_text, what_missing_text, respondent_name):
                     remaining_loose[loose_key].pop(i)
                     break
 
-        # Build the SET expression conditionally so we don't clobber data
-        # the user already manually filled in.
+        # Only set fields that are currently empty so we don't clobber
+        # data the user already manually filled in.
         set_parts = []
         expr_vals = {}
         if not had_feedback and feedback_text:
             set_parts.append("feedback_text = :f")
             expr_vals[":f"] = feedback_text
+        if not had_missing and what_missing_text:
+            set_parts.append("what_missing_text = :w")
+            expr_vals[":w"] = what_missing_text
         if not had_name and respondent_name:
             set_parts.append("respondent_name = :n")
             expr_vals[":n"] = respondent_name
 
         if not set_parts:
-            # Nothing to update for this response.
             skipped_no_match += 1
             continue
 

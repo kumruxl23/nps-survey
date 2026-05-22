@@ -329,6 +329,12 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
     logger.info("[%s] %d tasks fetched from section '%s'",
                 org.org_id, len(tasks), target.get("name"))
 
+    # Pre-load existing nominations so we can:
+    #   1. find the right `(email, leader)` row to mark responded=True
+    #   2. know which sort-keys are already taken when we have to fabricate one
+    existing_nominations = nps_nomination_repo.list_nominations(org.org_id, cycle_id)
+    taken_keys = {n.email.strip().lower() for n in existing_nominations if n.email}
+
     for task in tasks:
         stats["tasks"] += 1
 
@@ -368,21 +374,19 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
         leader_raw = _custom_field_value(task, leader_gid) if leader_gid else None
         leader = (leader_raw or "").strip() if isinstance(leader_raw, str) else ""
 
-        # Feedback text — read the Feedback field. Concat "What was missing"
-        # if present so feedback isn't fragmented across fields. Some
-        # respondents write "See above" in Feedback and put the real text
-        # in "What was missing".
-        feedback_parts = []
-        for gid in (feedback_gid, what_missing_gid):
-            if not gid:
-                continue
-            raw = _custom_field_value(task, gid)
-            if raw is None:
-                continue
-            text = str(raw).strip() if not isinstance(raw, str) else raw.strip()
-            if text and text.lower() not in ("see above", "n/a", "na", "none"):
-                feedback_parts.append(text)
-        feedback_text = "\n\n".join(feedback_parts)
+        # Feedback text — Asana's free-form Feedback custom field. Stored
+        # separately from "What was missing" so the UI can show them in
+        # distinct columns.
+        feedback_raw = _custom_field_value(task, feedback_gid) if feedback_gid else None
+        feedback_text = ""
+        if feedback_raw is not None:
+            feedback_text = str(feedback_raw).strip() if not isinstance(feedback_raw, str) else feedback_raw.strip()
+
+        # What was missing — kept separate.
+        what_missing_raw = _custom_field_value(task, what_missing_gid) if what_missing_gid else None
+        what_missing_text = ""
+        if what_missing_raw is not None:
+            what_missing_text = str(what_missing_raw).strip() if not isinstance(what_missing_raw, str) else what_missing_raw.strip()
 
         # Respondent identity — used for matching against existing nominations + creating one if missing
         assignee = task.get("assignee") or {}
@@ -402,24 +406,51 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
         recorded_at = task.get("completed_at") or task.get("created_at") \
             or datetime.now(timezone.utc).isoformat()
 
-        # Per Q3.B: always create a nomination row for the responder — even if they
-        # weren't on the targeted list. Email key is required for the table; if no
-        # email available, fabricate one from task GID so the row stays unique.
-        nomination_email = email or f"asana-task-{task.get('gid', 'unknown')}@unknown.local"
-        nomination = Nomination(
-            org_id=org.org_id,
-            cycle_id=cycle_id,
-            email=nomination_email,
-            name=respondent_name or nomination_email.split("@")[0],
-            leader=leader,
-            responded=True,
-            responded_at=recorded_at,
+        # Multi-leader-aware nomination handling:
+        #  - If a nomination row already exists for (base_email, leader), update
+        #    it (set responded=True) instead of creating a new row.
+        #  - If no matching row exists, this is an off-list responder OR a new
+        #    leader for an already-known stakeholder. Pick a unique key via
+        #    the suffix encoder.
+        deliverable_email = email or f"asana-task-{task.get('gid', 'unknown')}@unknown.local"
+
+        from app.services import nomination_keys  # late import — script context
+        existing = nomination_keys.find_nomination_for_leader(
+            existing_nominations, deliverable_email, leader,
         )
+        if existing is not None:
+            # Update in place — preserves the existing key (suffixed or not)
+            nomination = Nomination(
+                org_id=org.org_id,
+                cycle_id=cycle_id,
+                email=existing.email,
+                name=existing.name or respondent_name or deliverable_email.split("@")[0],
+                leader=leader,
+                responded=True,
+                responded_at=recorded_at,
+            )
+        else:
+            # New nomination — pick a unique sort-key via the suffix encoder
+            nomination_email = nomination_keys.encode_for_leader(
+                deliverable_email, leader, taken_keys,
+            )
+            nomination = Nomination(
+                org_id=org.org_id,
+                cycle_id=cycle_id,
+                email=nomination_email,
+                name=respondent_name or deliverable_email.split("@")[0],
+                leader=leader,
+                responded=True,
+                responded_at=recorded_at,
+            )
+
         if dry_run:
-            logger.debug("[%s] DRY RUN nomination: leader='%s' email='%s'",
-                         org.org_id, leader, nomination_email)
+            logger.debug("[%s] DRY RUN nomination: leader='%s' email=%s",
+                         org.org_id, leader, nomination.email)
         else:
             nps_nomination_repo.put_nomination(nomination)
+            # Make sure subsequent iterations see this new row
+            existing_nominations.append(nomination)
         stats["nominations"] += 1
 
         response = NpsResponse(
@@ -430,6 +461,7 @@ def backfill_org(org, dry_run: bool) -> dict[str, int]:
             category=category,
             leader=leader,
             feedback_text=feedback_text,
+            what_missing_text=what_missing_text,
             respondent_name=respondent_name,
             recorded_at=recorded_at,
         )
