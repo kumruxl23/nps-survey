@@ -119,6 +119,12 @@ def main() -> None:
                         help="Also drop leader self-response nominations "
                              "(name == leader). Default: skip (assume "
                              "cleanup_offlist_nominations.py handled them).")
+    parser.add_argument("--strict", action="store_true",
+                        help="Drop EVERY DB row not in the workbook, "
+                             "including off-list responders (responded=True). "
+                             "Use when the workbook is the absolute truth and "
+                             "off-list responses should be discarded. Default: "
+                             "off-list responders are kept per rule 3.")
     args = parser.parse_args()
 
     if not args.workbook.is_file():
@@ -144,8 +150,9 @@ def main() -> None:
     to_add: list[dict] = [t for t in targets
                           if (t["email"], t["leader"]) not in existing_by_pair]
 
-    # Plan DROPs: every existing pair that's not in workbook AND not responded.
-    # Off-list responders (responded=True) stay per rule 3.
+    # Plan DROPs: every existing pair that's not in workbook.
+    # Default behavior: keep responded=True off-list responders (rule 3).
+    # --strict: drop them too (workbook is absolute truth).
     to_drop: list[Nomination] = []
     self_noms: list[Nomination] = []
     for n in existing:
@@ -161,11 +168,11 @@ def main() -> None:
             if args.include_self_noms:
                 to_drop.append(n)
             continue
-        if not n.responded:
+        if args.strict or not n.responded:
             to_drop.append(n)
 
-    logger.info("[%s] ADD %d, DROP %d (self-noms detected: %d, %s)",
-                args.org, len(to_add), len(to_drop), len(self_noms),
+    logger.info("[%s] ADD %d, DROP %d (strict=%s, self-noms detected: %d, %s)",
+                args.org, len(to_add), len(to_drop), args.strict, len(self_noms),
                 "included" if args.include_self_noms else "skipped")
 
     for t in to_add:
