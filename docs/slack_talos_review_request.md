@@ -14,11 +14,16 @@ the **NPS Survey Reminder** Slack app.
 - **Slack workspace:** Amazon (T016NEJQWE9)
 - **Owner:** kumruxl@ (Rohit Kumar), WHS CPT IN team
 - **Backup owner:** kuvinu@ (planned, not yet assigned)
-- **Source repo:** https://github.com/kumruxl23/nps-survey
-- **Deployed at:** https://15-206-208-196.nip.io/nps/dashboard
+- **Source repo:** ssh://git.amazon.com/pkg/NPSSurveyAutomation
+  (Note: also mirrored to a private GitHub for laptop dev; the
+  authoritative copy lives on git.amazon.com / GitFarm.)
+- **Deployed at:** https://15-206-208-196.nip.io/nps/dashboard (internal,
+  TLS via Let's Encrypt; Midway/SSO migration on the roadmap)
 - **AWS account:** 399016860083 (region ap-south-1)
 - **Hosting:** Single EC2 instance (i-06ccd83e4b55fa98f), nginx + Let's Encrypt
-- **CTI:** WHS-India / Computer-Vision / AIFA (verify before submission)
+- **CTI:** TBD — confirming with manager (placeholder values must NOT be
+  trusted; reviewer should not route follow-ups via this field until
+  confirmed)
 
 ## Purpose
 
