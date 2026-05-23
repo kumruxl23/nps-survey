@@ -6,6 +6,7 @@ All routes delegate to the service layer and return JSON responses.
 """
 
 import logging
+import os
 
 from flask import Blueprint, jsonify, render_template, request
 
@@ -39,10 +40,20 @@ nps_bp = Blueprint(
 @nps_bp.route("/orgs", methods=["GET"])
 @login_required
 def list_orgs():
-    """List all configured orgs."""
+    """List all configured orgs.
+
+    The slack_bot_token is intentionally redacted - the UI only needs
+    to know whether one is configured, not the value itself.
+    """
     try:
         orgs = nps_org_config_service.list_all_orgs()
-        return jsonify([vars(o) for o in orgs])
+        out = []
+        for o in orgs:
+            d = vars(o).copy()
+            token = d.pop("slack_bot_token", "") or ""
+            d["slack_bot_token_set"] = bool(token)
+            out.append(d)
+        return jsonify(out)
     except Exception as exc:
         logger.exception("Error listing orgs")
         return jsonify({"error": str(exc)}), 500
@@ -75,12 +86,59 @@ def add_org():
 @nps_bp.route("/orgs/update", methods=["POST"])
 @role_required("admin")
 def update_org():
-    """Update an existing org's configuration."""
+    """Update an existing org's configuration.
+
+    Accepts an allowlisted set of fields. ``reminder_channels`` is
+    coerced from CSV/list and validated against {'email', 'slack'}.
+    ``slack_bot_token`` is stored as-is; clients should send the empty
+    string to clear it. Empty string values for other fields will
+    overwrite the existing value, so callers should omit a field they
+    don't want to change.
+    """
+    ALLOWED_FIELDS = {
+        "org_name",
+        "asana_project_gid",
+        "asana_form_url",
+        "quip_doc_id",
+        "custom_field_nps_score_gid",
+        "custom_field_category_gid",
+        "custom_field_org_name_gid",
+        "custom_field_leader_gid",
+        "custom_field_feedback_gid",
+        "custom_field_what_missing_gid",
+        "slack_bot_token",
+        "reminder_channels",
+        "auto_add_unmatched",
+    }
+    VALID_CHANNELS = {"email", "slack"}
+
     try:
         data = request.json or {}
         org_id = data.pop("org_id", None)
         if not org_id:
             return jsonify({"error": "org_id is required"}), 400
+
+        # Drop any field the client tried to sneak in that we don't manage here.
+        unknown = set(data.keys()) - ALLOWED_FIELDS
+        if unknown:
+            return jsonify({"error": f"Unknown fields: {sorted(unknown)}"}), 400
+
+        # Normalize reminder_channels: accept list or CSV string
+        if "reminder_channels" in data:
+            raw = data["reminder_channels"]
+            if isinstance(raw, str):
+                raw = [c.strip() for c in raw.split(",") if c.strip()]
+            if not isinstance(raw, list) or not raw:
+                return jsonify({"error": "reminder_channels must be a non-empty list"}), 400
+            channels = [c.lower() for c in raw]
+            invalid = [c for c in channels if c not in VALID_CHANNELS]
+            if invalid:
+                return jsonify({"error": f"Invalid channels: {invalid}. Valid: {sorted(VALID_CHANNELS)}"}), 400
+            data["reminder_channels"] = channels
+
+        if "auto_add_unmatched" in data:
+            data["auto_add_unmatched"] = bool(data["auto_add_unmatched"])
+
         org = nps_org_config_service.update_org(org_id, **data)
         return jsonify(vars(org))
     except ValueError as exc:
