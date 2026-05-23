@@ -123,6 +123,8 @@ interactivity payloads, webhooks, or shortcuts.
    ```
 4. Send orchestration in `app/services/nps_distribution_service.py`
    (`send_reminder` and `send_targeted_reminder`).
+5. Data flow diagram: `docs/nps_data_flow_diagram.svg` (illustrative;
+   Design Inspector diagram TBD).
 
 ## Talos engagement form fields (suggested values)
 
