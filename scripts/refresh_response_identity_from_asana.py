@@ -181,14 +181,34 @@ def main() -> None:
         if n.leader and n.leader not in name_to_leaders[key]:
             name_to_leaders[key].append(n.leader)
 
-    def lookup_canonical_leader(respondent_name: str, fallback: str) -> str:
+    def lookup_canonical_leader(respondent_name: str, current_leader: str, form_leader: str) -> str:
+        """Pick the right leader for a response.
+
+        Priority:
+          1. If the response's CURRENT leader is one of the workbook leaders
+             for that respondent, keep it (don't move correctly-tagged rows).
+          2. Else if the FORM-picked leader (from Asana) is in the workbook
+             list, use it.
+          3. Else pick the first workbook leader (deterministic fallback).
+          4. If the respondent has NO workbook nomination, keep the
+             form-picked leader (legitimate off-list response).
+        """
         rn = _norm_name(respondent_name)
-        if rn in name_to_leaders:
-            return name_to_leaders[rn][0]
-        for nom_name, leaders in name_to_leaders.items():
-            if _names_likely_same(respondent_name, nom_name):
-                return leaders[0]
-        return fallback
+        leaders = name_to_leaders.get(rn)
+        if leaders is None:
+            for nom_name, lds in name_to_leaders.items():
+                if _names_likely_same(respondent_name, nom_name):
+                    leaders = lds
+                    break
+        if not leaders:
+            return form_leader
+        cl = (current_leader or "").strip()
+        if cl in leaders:
+            return cl
+        fl = (form_leader or "").strip()
+        if fl in leaders:
+            return fl
+        return leaders[0]
 
     # Walk responses, plan updates.
     responses = nps_response_repo.list_responses(args.org, args.cycle)
@@ -229,7 +249,9 @@ def main() -> None:
                            r.response_id, score, day)
             continue
 
-        canonical_leader = lookup_canonical_leader(info["respondent_name"], info["leader_form"])
+        canonical_leader = lookup_canonical_leader(
+            info["respondent_name"], r.leader, info["leader_form"],
+        )
 
         sets: dict[str, str] = {}
         if (r.respondent_name or "").strip() != info["respondent_name"] and info["respondent_name"]:
