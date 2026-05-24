@@ -67,8 +67,13 @@ def create_app(config=None):
     app.register_blueprint(auth_bp)
 
     if not app.config.get("TESTING"):
-        # Create DynamoDB tables if they don't exist (dev/local only)
-        _ensure_tables()
+        # Create DynamoDB tables only when explicitly opted in (dev/local
+        # bootstrap). In production, tables are pre-created and the EC2
+        # IAM role is intentionally scoped without dynamodb:CreateTable
+        # to keep the principle of least privilege. The defensive call
+        # would otherwise log AccessDeniedException on every restart.
+        if os.environ.get("NPS_ENSURE_TABLES", "").lower() in ("1", "true", "yes"):
+            _ensure_tables()
 
         # Create default admin user if none exist
         try:
