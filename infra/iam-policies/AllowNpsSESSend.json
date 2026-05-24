@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SendEmailFromVerifiedDomainOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail",
+        "ses:SendRawEmail"
+      ],
+      "Resource": [
+        "arn:aws:ses:ap-south-1:399016860083:identity/whs-cpt.amazon.dev",
+        "arn:aws:ses:ap-south-1:399016860083:identity/nps-survey@whs-cpt.amazon.dev"
+      ]
+    }
+  ]
+}
