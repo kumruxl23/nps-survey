@@ -20,3 +20,6 @@ infra/
 # Local-only files (deployment payloads, ad-hoc setup notes)
 deploy_payload.txt
 SETUP_CHECKLIST.md
+
+# Stakeholder workbooks (PII) — live in S3, not the repo
+*.xlsx
