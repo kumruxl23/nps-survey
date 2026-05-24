@@ -1,8 +1,22 @@
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
 .hypothesis/
+
+# Tooling state
 .kiro/
+
+# Brazil build artifacts
+/build
+
+# Infra: deployment scripts may contain account IDs, env vars, secrets.
+# Keep ignored except for IAM policy JSON which is referenced by ASR
+# and is safe to publish (resource ARNs only, no secrets).
 infra/
+!infra/iam-policies/
+!infra/iam-policies/**
+
+# Local-only files (deployment payloads, ad-hoc setup notes)
 deploy_payload.txt
 SETUP_CHECKLIST.md
