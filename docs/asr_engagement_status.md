@@ -1,0 +1,92 @@
+# ASR Engagement Status — NPS Survey Reminder Slack workspace install
+
+Snapshot of the Amazon Security Review (ASR) and related security
+workflows as of 2026-06-01. Update this file whenever a task status
+changes so the work doesn't get lost across sessions.
+
+## Engagement identifiers
+
+| Item | Value |
+|---|---|
+| ASR Application Name | WHS_AIFA-1763314908 |
+| ASR Application ID | 33d9f777-6675-4612-bf3e-640960c021ad |
+| ASR URL | https://asr.security.amazon.dev/applications/33d9f777-6675-4612-bf3e-640960c021ad |
+| Bindle | WHS_AIFA |
+| Owner | kumruxl@ |
+| Backup | kuvinu@ (planned) |
+| Classification | Red, Ring-3, Red Rank Score 3.39 |
+| Profiles | Baseline + Red + Third Party Security |
+| Code package | ssh://git.amazon.com/pkg/NPSSurveyAutomation |
+| Slack workspace | T016NEJQWE9 (Amazon enterprise) |
+| Slack app | NPS Survey Reminders (install request submitted, blocked on ASR) |
+
+## Why we're going through ASR
+
+Slack workspace admin (AmazonUC-SIGNAL) requires a Talos / ASR engagement
+ARN before approving the bot install. Slack flagged `users:read` as
+high-risk; `users:read.email` requires it as a parent scope per Slack
+platform rule. Bot only calls `users.lookupByEmail` and `chat.postMessage`
+— no event subscriptions, no callbacks. Full reasoning in
+`docs/slack_talos_review_request.md`.
+
+## Task status
+
+### Application Owner tasks — DONE
+
+| Task | Status | Evidence |
+|---|---|---|
+| Threat Model (Baseline) | ✅ Complete | DI project NPSSurveyReminders, 14 threats triaged (13 Mitigated + 1 False Positive), exported HTML uploaded |
+| Permissions (Red) | ✅ Complete | IAM role `nps-survey-ec2-role` scoped to least privilege; AmazonDynamoDBFullAccess + AmazonSESFullAccess replaced with AllowNpsDynamoDB + AllowNpsSESSend (see `infra/iam-policies/`) |
+| Incident Response Plan (Red) | ✅ Complete | `docs/incident_response_plan.md` |
+| Third Party Security Review | ✅ Complete | TPTA0027224 (Asana) + TPTA0050664 (Slack), both Tier 4, "Amazon 3P Security Bar Met" |
+
+### Application Owner tasks — BLOCKED on external
+
+| Task | Status | Blocked on |
+|---|---|---|
+| Privacy Compliance Review (Baseline) | Incomplete | Kale review awaiting privacy reviewer (kale-wrkplace-hlth-safety group); Veritas ID 33d9f777-...c021ad |
+| Resolve Required Issues (Baseline) | Incomplete | Privacy Compliance must complete first |
+
+### Reviewer-assigned tasks — BLOCKED on reviewer assignment
+
+| Task | Status | Notes |
+|---|---|---|
+| Automated Code Review (Red) | Incomplete | Reviewer-side; we uploaded local Bandit CSV (487 Low, 0 Medium, 0 High, all auto-triaged FP) to give the reviewer a head start |
+| Review Threat Model (Red) | Incomplete | Reviewer-side |
+| Threat Mitigation Testing (Red) | Incomplete | Reviewer-side |
+| Manual Code Review (Red) | Incomplete | Reviewer-side; package linked: NPSSurveyAutomation |
+
+## Reviewer Status
+
+- ASR reviewer: **Not assigned** (clicked "Request reviewer", waiting)
+- Kale reviewer group: **kale-wrkplace-hlth-safety** (potentially wrong fit for an NPS feedback tool — confirm with Smruthi)
+
+## Open dependencies
+
+1. **Kale reviewer assignment** — 5-day SLA from Smruthi (06/03/2026). Sent reply asking about the right reviewer group.
+2. **ASR reviewer assignment** — typical SLA 1-3 business days.
+3. **AmazonUC-SIGNAL Slack install approval** — gated on this ASR completing.
+4. **CTI confirmation** — placeholder TBD; need manager confirmation. Wrong CTI routes follow-up tickets incorrectly.
+5. **Backup PAT holder (kuvinu@)** — file follow-up on P426628259.
+
+## Things to do once reviewers respond
+
+- Triage any OneSAST findings the security reviewer surfaces in Automated Code Review
+- Address any Privacy Compliance follow-up questions from Kale reviewer
+- Once both are clean, the certification flips green and we get the engagement ARN
+- Paste the engagement ARN back into the original Slack install request to unblock workspace install
+
+## Operational notes
+
+- Code repo: GitFarm (authoritative) + GitHub mirror at github.com/kumruxl23/nps-survey (laptop dev)
+- IAM policies live in `infra/iam-policies/` (intentionally un-ignored from infra/)
+- Bandit CSV converter at `scripts/bandit_to_shepherd_csv.py`
+- DI project at https://design-inspector.a2z.com/#NPSSurveyReminders
+
+## Related artifacts (in repo)
+
+- `docs/slack_talos_review_request.md` — Slack security review writeup
+- `docs/asr_threat_model_workbook.md` — Threat model rationale + STRIDE playbook
+- `docs/incident_response_plan.md` — IR runbook
+- `docs/nps_architecture_diagram.drawio` — DI architecture diagram XML source
+- `infra/iam-policies/` — least-privilege policies for nps-survey-ec2-role
