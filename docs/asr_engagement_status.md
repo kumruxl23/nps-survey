@@ -58,8 +58,25 @@ platform rule. Bot only calls `users.lookupByEmail` and `chat.postMessage`
 
 ## Reviewer Status
 
-- ASR reviewer: **Not assigned** (clicked "Request reviewer", waiting)
-- Kale reviewer group: **kale-wrkplace-hlth-safety** (potentially wrong fit for an NPS feedback tool — confirm with Smruthi)
+- ASR reviewer: **Not assigned**. Clicked "Request reviewer" — but per SC
+  Core team (ticket P451747385), reviewer assignment is self-service.
+  Must find a Security Certifier via https://reviewers.security.amazon.dev/reviewers
+  filtered to L8/L10 org chain, then reach out directly.
+  - **Reached out to: sripathb@amazon.com** (SC found under L8 org) — [date pending response]
+  - Escalate to SC Core team only after exhausting org-chain SCs, with
+    contact history. 48-business-hour SLA on SC Core tickets.
+- Kale reviewer group: **kale-wrkplace-hlth-safety** — CANNOT be changed;
+  it's derived from the Access Control Bindle's team ownership (confirmed
+  by Smruthi on P441140532). Kale is mapped to the ASR; just awaiting
+  reviewer pickup.
+
+## Related tickets
+
+- **P441140532** — Smruthi comms thread (Kale↔ASR mapping, reviewer group)
+- **P451747385** — SC Core team, how to find a Security Certifier
+- **D465560471** — "Uncertified Red Application In Production" campaign SIM;
+  filed with business justification + compensating controls. Release date
+  2026-04-01 confirmed accurate, NOT changed (scenario 1).
 
 ## Open dependencies
 
