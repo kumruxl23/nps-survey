@@ -88,6 +88,30 @@ attempt to reclassify down to Yellow — the Red is correct.
   filed with business justification + compensating controls. Release date
   2026-04-01 confirmed accurate, NOT changed (scenario 1).
 
+## Production status (2026-06-17)
+
+The application has been taken OUT of production. The H1 2026 NPS cycle
+closed; the app was used to demo the dashboard to leaders and is no
+longer actively serving. `nps-survey.service` is stopped + disabled on
+EC2 i-06ccd83e4b55fa98f (optionally the instance is stopped too).
+
+Rationale: clears the "Uncertified Red Application in Production"
+Shepherd finding without user impact (cycle is done). DynamoDB data is
+untouched and persists independently of the EC2.
+
+Re-deployment plan: bring the service back ONLY after the ASR review is
+certified, for the H2 2026 cycle. Do not return to production
+uncertified.
+
+## Shepherd findings status (2026-06-17)
+
+| Finding | State |
+|---|---|
+| Javascript Resources Hosted on External CDNs | Fixed — Bootstrap self-hosted (commit ffacccb), deployed; auto-resolves next scan |
+| Update operating system | Fixed — AL2023 kernel upgraded + rebooted, dnf-automatic enabled; auto-resolves next scan |
+| Uncertified Red App (live 33d9f777) | Clears — app taken out of production 2026-06-17; SIM D465560471 updated |
+| Uncertified Red App (orphan 556dfa31) | Duplicate; clear via ASR support merge/remove. Do NOT use ring dispute. |
+
 ## Open dependencies
 
 1. **Kale reviewer assignment** — 5-day SLA from Smruthi (06/03/2026). Sent reply asking about the right reviewer group.
