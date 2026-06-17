@@ -58,17 +58,27 @@ platform rule. Bot only calls `users.lookupByEmail` and `chat.postMessage`
 
 ## Reviewer Status
 
-- ASR reviewer: **Not assigned**. Clicked "Request reviewer" — but per SC
-  Core team (ticket P451747385), reviewer assignment is self-service.
-  Must find a Security Certifier via https://reviewers.security.amazon.dev/reviewers
-  filtered to L8/L10 org chain, then reach out directly.
-  - **Reached out to: sripathb@amazon.com** (SC found under L8 org) — [date pending response]
-  - Escalate to SC Core team only after exhausting org-chain SCs, with
-    contact history. 48-business-hour SLA on SC Core tickets.
+- ASR reviewer: **sripathb@amazon.com** agreed to certify (SC under L8 org,
+  currently reviewing another Red app). Found via
+  https://reviewers.security.amazon.dev/reviewers. No other certifiers in
+  our org chain.
 - Kale reviewer group: **kale-wrkplace-hlth-safety** — CANNOT be changed;
-  it's derived from the Access Control Bindle's team ownership (confirmed
-  by Smruthi on P441140532). Kale is mapped to the ASR; just awaiting
-  reviewer pickup.
+  derived from the Access Control Bindle's team ownership (confirmed by
+  Smruthi on P441140532). Kale is mapped to the ASR; awaiting reviewer
+  pickup.
+
+## Why this is a Red review (not Yellow)
+
+The Red classification is NOT from data tier — the app only handles
+Confidential data (employee name/email/NPS scores). The Red comes from
+the **third-party Slack integration's access profile**:
+- high-risk `users:read` scope (parent of `users:read.email` per Slack)
+- `chat:write` (write access into the Slack workspace)
+- sharing non-public Amazon data (employee email -> Slack user ID) with a
+  third-party SaaS
+
+This is a legitimate Red trigger regardless of data classification. Do NOT
+attempt to reclassify down to Yellow — the Red is correct.
 
 ## Related tickets
 

@@ -1,0 +1,116 @@
+<mxfile host="design-inspector.a2z.com" modified="2026-06-01T00:00:00.000Z" agent="kiro" version="22.0.0" type="device">
+  <diagram name="Architecture" id="arch-page-1">
+    <mxGraphModel dx="1422" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="NPSSurveyReminders — Architecture" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="280" y="20" width="540" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Trust Boundary: Amazon Corp Network -->
+        <mxCell id="corp-zone" value="Amazon Corp Network" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#E1F5FE;strokeColor=#0277BD;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
+          <mxGeometry x="60" y="80" width="280" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="user" value="Internal Amazon User&#10;(admin / editor / viewer)" style="shape=actor;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="160" y="110" width="80" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Trust Boundary: AWS Account -->
+        <mxCell id="aws-zone" value="AWS Account 399016860083 (ap-south-1)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
+          <mxGeometry x="380" y="80" width="540" height="540" as="geometry" />
+        </mxCell>
+
+        <!-- nginx + Flask EC2 -->
+        <mxCell id="ec2" value="EC2 i-06ccd83e4b55fa98f&#10;(nginx :443 + gunicorn/Flask :5000)&#10;Amazon Linux 2023" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="560" y="130" width="220" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- DynamoDB -->
+        <mxCell id="ddb" value="DynamoDB&#10;Nps* tables&#10;(7 tables, encrypted)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="420" y="290" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- SES -->
+        <mxCell id="ses" value="AWS SES&#10;verified domain&#10;whs-cpt.amazon.dev" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#C5E1A5;strokeColor=#33691E;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="610" y="290" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Secrets Manager -->
+        <mxCell id="sm" value="Secrets Manager&#10;nps-survey/asana-pat" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#B71C1C;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="420" y="410" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- CloudWatch Logs -->
+        <mxCell id="cw" value="CloudWatch Logs&#10;/aws/ec2/nps-survey-app" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8BBD0;strokeColor=#880E4F;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="610" y="410" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- S3 -->
+        <mxCell id="s3" value="S3&#10;whs-cpt-nps-survey&#10;(stakeholder workbooks)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#D7CCC8;strokeColor=#3E2723;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="515" y="525" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- IAM Role -->
+        <mxCell id="iam" value="IAM role&#10;nps-survey-ec2-role&#10;(scoped least-priv)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#4A148C;fontSize=11;dashed=1" vertex="1" parent="1">
+          <mxGeometry x="800" y="130" width="100" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Slack API (3rd party) -->
+        <mxCell id="slack-zone" value="Slack (3rd-party SaaS)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#F3E5F5;strokeColor=#4A148C;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
+          <mxGeometry x="950" y="120" width="120" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="slack" value="Slack API&#10;chat.postMessage&#10;users.lookupByEmail" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="965" y="160" width="100" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Asana API (3rd party) -->
+        <mxCell id="asana-zone" value="Asana (3rd-party SaaS)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FFEBEE;strokeColor=#B71C1C;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
+          <mxGeometry x="950" y="340" width="120" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="asana" value="Asana API&#10;custom-field reads&#10;PAT auth" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#B71C1C;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="965" y="380" width="100" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" value="HTTPS / Session" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=10" edge="1" parent="1" source="user" target="ec2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e2" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="ddb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e3" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="ses">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e4" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="sm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e5" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="cw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e6" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="s3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e7" value="assumes" style="endArrow=classic;html=1;fontSize=10;dashed=1" edge="1" parent="1" source="ec2" target="iam">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e8" value="HTTPS / Bearer (bot token)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="slack">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e9" value="HTTPS / Bearer (PAT)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="asana">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
