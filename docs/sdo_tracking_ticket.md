@@ -36,6 +36,11 @@ automatically once CRs are required on mainline.
 
 ## Acceptance criteria
 
+- [ ] Phase 1 — CRUX Auto Added Reviewer rule on mainline (1 locked
+      approval); adopt AutoSDE: author + `autosde lint` + commit
+      `AUTOSDE.yaml`, then point an AutoSDE Rule Config rule at its blob
+      URL (file-first ordering to avoid blocking merges). Confirm the
+      hard direct-push block mechanism with the certifier.
 - [ ] Phase 2 — Replace NoOpBuild `Config` with a Python build that runs
       the full `pytest` suite (259 tests) as a build gate; add static
       analysis (Bandit/OneSAST) to the build.

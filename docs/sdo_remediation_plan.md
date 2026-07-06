@@ -48,10 +48,27 @@ organically. As a result it does not yet meet the full SDO bar:
 ## Remediation plan
 
 ### Phase 1 — Enforce code reviews (fast, before/at cert)
-- Confirm/enable mainline branch protection so **every change requires a
-  CR via CRUX** — no direct pushes.
-- Document the CR workflow for the team.
-- **Effort**: config change, ~1 hour.
+- **CRUX Auto Added Reviewer rule** on `mainline`: require 1 locked
+  approval (team WHS CPT IN AIFA, or kuvinu@ to avoid self-approval).
+  This guarantees an approver on every CR. Done via CRUX Rules.
+- **Adopt AutoSDE (policy-as-code)**: author an `AUTOSDE.yaml` in the
+  package defining the SDO policy (mandatory review + required checks),
+  validate with `autosde lint`, commit to mainline, then point a CRUX
+  "AutoSDE Rule Config" rule at its blob URL. This is the first-class
+  SDO-enforcement mechanism and directly answers the "not following SDO
+  guidelines" concern.
+  - **Order matters**: file first (lint + commit) THEN create the rule.
+    A missing/invalid `AUTOSDE.yaml` blocks all merges on the scope.
+  - **Open**: need the canonical `AUTOSDE.yaml` schema / required-policy
+    bar — confirm with certifier or AutoSDE docs before authoring.
+- Note: the package already inherits org-level CRUX analysis gates
+  (Security Code Scanner, Software Assurance, Integration Tests,
+  Coverlay) that require 'Pass' to merge a CR.
+- **Open item**: confirm the exact mechanism that hard-blocks direct
+  pushes to mainline (Permissions tab is package access control, not
+  branch protection — no push-block toggle found there). Likely AutoSDE
+  or a GitFarm setting; question queued for the certifier.
+- **Effort**: reviewer rule ~15 min; AutoSDE ~half day once schema known.
 
 ### Phase 2 — Real build with tests (short)
 - Replace the NoOpBuild `Config` with a Python build that runs
