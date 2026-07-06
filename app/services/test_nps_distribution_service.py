@@ -113,10 +113,15 @@ class TestDistributeSurvey:
         cycle = nps_cycle_repo.get_cycle(_ORG, _CYCLE)
         assert cycle.distributed_at != ""
 
-        # Verify email was called with BCC recipients
-        mock_email.send_bcc_email.assert_called_once()
-        call_kwargs = mock_email.send_bcc_email.call_args
-        assert set(call_kwargs.kwargs["bcc_recipients"]) == {"a@example.com", "b@example.com"}
+        # Distribution sends individually per recipient (one email each) so
+        # a single failure can't block the rest and no recipient sees another
+        # recipient's address. Expect one call per nominee.
+        assert mock_email.send_bcc_email.call_count == 2
+        sent_to = {
+            call.kwargs["bcc_recipients"][0]
+            for call in mock_email.send_bcc_email.call_args_list
+        }
+        assert sent_to == {"a@example.com", "b@example.com"}
 
     @patch("app.services.nps_distribution_service.email_client")
     def test_idempotent_already_distributed(self, mock_email, ddb_tables):
