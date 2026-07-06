@@ -21,5 +21,18 @@ infra/
 deploy_payload.txt
 SETUP_CHECKLIST.md
 
-# Stakeholder workbooks (PII) — live in S3, not the repo
+# Stakeholder workbooks (PII) ï¿½ live in S3, not the repo
 *.xlsx
+
+# Outlook emails / saved messages (may contain employee names + PII)
+*.msg
+
+# Office temp lock files
+~$*
+
+# Ad-hoc tool output / scratch (may contain PII; never publish to mirror)
+bandit-results.json
+bandit-shepherd.csv
+bandit-triage.md
+final_output*.json
+check_feedback_issues.py
