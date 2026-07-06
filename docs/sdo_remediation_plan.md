@@ -95,7 +95,9 @@ organically. As a result it does not yet meet the full SDO bar:
 
 ## Tracking
 
-- Follow-up ticket for the pipeline work: (to be created)
+- Follow-up ticket for the pipeline work: draft in
+  `docs/sdo_tracking_ticket.md` (record the filed TASK/SIM ID here once
+  created).
 - Owner: kumruxl@ · Backup: kuvinu@
 
 ---
