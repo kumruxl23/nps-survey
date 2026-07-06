@@ -13,6 +13,10 @@ import random
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "local-dev")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local-dev")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+# Local dev runs against a moto-mocked DynamoDB, so we DO want the app to
+# auto-create the tables on startup. Production leaves this unset (tables
+# are pre-created and the IAM role intentionally lacks dynamodb:CreateTable).
+os.environ.setdefault("NPS_ENSURE_TABLES", "1")
 os.environ.setdefault("GRAPH_CLIENT_ID", "local-dev")
 os.environ.setdefault("GRAPH_CLIENT_SECRET", "local-dev")
 os.environ.setdefault("GRAPH_TENANT_ID", "local-dev")
