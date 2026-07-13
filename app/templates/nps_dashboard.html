@@ -276,9 +276,14 @@
           data-org="${orgId}" data-cycle="${latest.cycle_id}">
           View Pending (${pendingCount})
         </button>
-        <button class="btn btn-sm btn-outline-primary" id="btnRemind-${orgId}"
+        <button class="btn btn-sm btn-outline-primary me-2" id="btnRemind-${orgId}"
           data-org="${orgId}" data-cycle="${latest.cycle_id}" data-pending="${pendingCount}" ${reminderDisabled}>
           Send Reminder to Pending (${pendingCount})
+        </button>
+        <button class="btn btn-sm btn-outline-warning" id="btnTestRemind-${orgId}"
+          data-org="${orgId}" data-cycle="${latest.cycle_id}"
+          title="Sends a test reminder to you only — no real stakeholders">
+          🧪 Test Reminder (to me)
         </button>
       </div>
     </div>`;
@@ -436,6 +441,36 @@
       const data=await resp.json();
       alert(resp.ok?_summarizeReminderResult(data):('Reminder failed: '+(data.error||resp.status)));
     }catch(err){alert('Reminder failed: '+err.message);}
+    finally{btn.disabled=false;btn.textContent=original;}
+  }
+
+  async function handleTestRemind(btn){
+    const orgId=btn.dataset.org;
+    const cycleId=btn.dataset.cycle;
+    const original=btn.textContent;
+    if(!window.confirm(
+      `Send a TEST reminder to yourself only?\n\n`+
+      `No real stakeholders are contacted — this is for demoing the reminder feature.`
+    ))return;
+    btn.disabled=true;btn.textContent='Sending...';
+    try{
+      const resp=await fetch('/nps/remind/test',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({org_id:orgId,cycle_id:cycleId})
+      });
+      const data=await resp.json();
+      if(resp.ok){
+        let msg=`Test reminder sent to ${data.recipient}.\n`+
+          `Email sent: ${data.email_sent_count||0}\n`+
+          `Slack sent: ${data.slack_sent_count||0}\n`+
+          `Failed: ${data.failed_count||0}`;
+        if(data.errors&&data.errors.length)msg+=`\n\nNotes:\n- `+data.errors.join('\n- ');
+        alert(msg);
+      }else{
+        alert('Test reminder failed: '+(data.error||resp.status));
+      }
+    }catch(err){alert('Test reminder failed: '+err.message);}
     finally{btn.disabled=false;btn.textContent=original;}
   }
 
@@ -828,6 +863,12 @@
       // Reminder + pending-list buttons — delegated handler covers all org panes
       contentEl.addEventListener('click',async function(e){
         // Bulk remind ("Send Reminder to Pending (N)")
+        // Test remind ("Test Reminder (to me)") — check before btnRemind-
+        const testRemind=e.target.closest('[id^="btnTestRemind-"]');
+        if(testRemind){
+          await handleTestRemind(testRemind);
+          return;
+        }
         const bulk=e.target.closest('[id^="btnRemind-"]');
         if(bulk){
           await handleBulkRemind(bulk);

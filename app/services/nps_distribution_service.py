@@ -22,7 +22,7 @@ from app.db.models import (
     ReminderResult,
 )
 from app.services import email_client, nps_nomination_service, nps_org_config_service
-from app.services import slack_client
+from app.services import slab_client, slack_client
 from app.services.nomination_keys import base_email
 from app.services.slack_client import SlackUserNotFoundError
 
@@ -456,3 +456,100 @@ def send_targeted_reminder(
     )
 
     return result
+
+
+DEFAULT_TEST_REMINDER_RECIPIENT = "kumruxl@amazon.com"
+
+
+def send_test_reminder(org_id: str = None, cycle_id: str = None, recipient: str = None) -> dict:
+    """Send a self-test reminder to a fixed recipient (default: you).
+
+    For demoing/testing the reminder feature WITHOUT emailing real
+    stakeholders. Always sends to ``recipient`` (defaults to
+    ``NPS_TEST_REMINDER_RECIPIENT`` env, else kumruxl@amazon.com),
+    regardless of the nomination list.
+
+    Deliberately does NOT write ReminderLog or DeliveryFailure records, so
+    it never pollutes real cycle data. Uses the org's real form URL /
+    channels when ``org_id`` resolves; otherwise falls back to email-only
+    with a placeholder link.
+
+    Returns a ReminderResult-shaped dict plus ``recipient`` and ``errors``.
+    """
+    recipient = (
+        recipient
+        or os.environ.get("NPS_TEST_REMINDER_RECIPIENT")
+        or DEFAULT_TEST_REMINDER_RECIPIENT
+    ).strip()
+
+    form_url = "https://form.asana.com/?k=nps-test"
+    channels = ["email"]
+    org = None
+    if org_id:
+        try:
+            org = nps_org_config_service.get_org(org_id)
+        except Exception:
+            org = None
+    if org:
+        form_url = org.asana_form_url or form_url
+        channels = list(org.reminder_channels or ["email"]) or ["email"]
+
+    email_sent = slack_sent = failed = 0
+    errors: list[str] = []
+
+    # --- Email (works today via SES) ---
+    if "email" in channels:
+        from_address = os.environ.get("NPS_FROM_ADDRESS", "nps-survey@example.com")
+        email_result = email_client.send_bcc_email(
+            subject="[TEST] " + _REMINDER_SUBJECT,
+            body=_build_reminder_body(form_url),
+            bcc_recipients=[recipient],
+            from_address=from_address,
+        )
+        if email_result.ok:
+            email_sent += 1
+        else:
+            failed += 1
+            errors.append(f"email: {email_result.error or 'unknown error'}")
+
+    # --- Slack (best-effort; works once SLAB is onboarded, or if a bot
+    #     token with users.lookupByEmail is configured on the org) ---
+    if "slack" in channels:
+        try:
+            slack_user_id = None
+            if slab_client._get_endpoint():
+                slack_user_id = slab_client.lookup_slack_id_by_alias(
+                    slab_client.alias_from_email(recipient)
+                )
+                bot_token = org.slack_bot_token if org else ""
+            elif org and org.slack_bot_token:
+                bot_token = org.slack_bot_token
+                slack_user_id = slack_client.lookup_user_by_email(recipient, bot_token)
+            else:
+                bot_token = ""
+                errors.append("slack: not available yet (no SLAB endpoint / bot token)")
+
+            if slack_user_id and bot_token:
+                dm = slack_client.send_dm(
+                    slack_user_id, _build_slack_reminder_message(form_url), bot_token
+                )
+                if dm.ok:
+                    slack_sent += 1
+                else:
+                    failed += 1
+                    errors.append(f"slack: {dm.error or 'send failed'}")
+        except SlackUserNotFoundError as exc:
+            failed += 1
+            errors.append(f"slack: {exc}")
+        except Exception as exc:  # noqa: BLE001 - surface any Slack error to the demoer
+            failed += 1
+            errors.append(f"slack: {exc}")
+
+    return {
+        "recipient": recipient,
+        "channels_used": list(channels),
+        "email_sent_count": email_sent,
+        "slack_sent_count": slack_sent,
+        "failed_count": failed,
+        "errors": errors,
+    }

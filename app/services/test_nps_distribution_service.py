@@ -378,3 +378,48 @@ class TestSendReminderBothChannels:
         # Both clients called
         mock_email.send_bcc_email.assert_called_once()
         mock_slack.send_dm.assert_called_once()
+
+
+class TestSendTestReminder:
+    """The demo/test reminder always goes to a fixed recipient (you)."""
+
+    @patch("app.services.nps_distribution_service.email_client")
+    def test_email_only_default_recipient(self, mock_email):
+        mock_email.send_bcc_email.return_value = EmailResult(ok=True)
+        result = nps_distribution_service.send_test_reminder()
+        assert result["recipient"] == "kumruxl@amazon.com"
+        assert result["email_sent_count"] == 1
+        assert result["failed_count"] == 0
+        _, kwargs = mock_email.send_bcc_email.call_args
+        assert kwargs["bcc_recipients"] == ["kumruxl@amazon.com"]
+        assert kwargs["subject"].startswith("[TEST]")
+
+    @patch("app.services.nps_distribution_service.email_client")
+    def test_env_override_recipient(self, mock_email, monkeypatch):
+        monkeypatch.setenv("NPS_TEST_REMINDER_RECIPIENT", "someone@amazon.com")
+        mock_email.send_bcc_email.return_value = EmailResult(ok=True)
+        result = nps_distribution_service.send_test_reminder()
+        assert result["recipient"] == "someone@amazon.com"
+
+    @patch("app.services.nps_distribution_service.email_client")
+    def test_explicit_recipient_arg_wins(self, mock_email):
+        mock_email.send_bcc_email.return_value = EmailResult(ok=True)
+        result = nps_distribution_service.send_test_reminder(recipient="picked@amazon.com")
+        assert result["recipient"] == "picked@amazon.com"
+
+    @patch("app.services.nps_distribution_service.email_client")
+    def test_email_failure_recorded(self, mock_email):
+        mock_email.send_bcc_email.return_value = EmailResult(ok=False, error="SES boom")
+        result = nps_distribution_service.send_test_reminder()
+        assert result["email_sent_count"] == 0
+        assert result["failed_count"] == 1
+        assert any("SES boom" in e for e in result["errors"])
+
+    @patch("app.services.nps_distribution_service.email_client")
+    def test_does_not_write_reminder_log(self, mock_email, ddb_tables):
+        # A test reminder must never pollute real cycle data.
+        mock_email.send_bcc_email.return_value = EmailResult(ok=True)
+        nps_distribution_service.send_test_reminder()
+        # No org resolved -> email-only path; ensure no reminder logs were
+        # written (a test reminder must not pollute real cycle data).
+        assert nps_reminder_log_repo.list_logs("whs_cpt_in", "nope") == []

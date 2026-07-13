@@ -416,6 +416,37 @@ def send_reminder():
         return jsonify({"error": str(exc)}), 500
 
 
+@nps_bp.route("/remind/test", methods=["POST"])
+@role_required("admin", "editor")
+def send_test_reminder():
+    """Send a TEST reminder to a fixed recipient (default: kumruxl@).
+
+    For demoing the reminder feature without emailing real stakeholders.
+    Optional body: {"org_id": ..., "cycle_id": ..., "recipient": ...}.
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id") or None
+        cycle_id = data.get("cycle_id") or None
+        recipient = data.get("recipient") or None
+
+        from_addr = os.environ.get("NPS_FROM_ADDRESS", "")
+        if not from_addr or "example.com" in from_addr.lower():
+            return jsonify({
+                "error": (
+                    "NPS_FROM_ADDRESS is not configured (or is the example.com "
+                    "placeholder). Set it to a verified SES sender before sending "
+                    "a test reminder."
+                )
+            }), 503
+
+        result = nps_distribution_service.send_test_reminder(org_id, cycle_id, recipient)
+        return jsonify(result)
+    except Exception as exc:
+        logger.exception("Error sending test reminder")
+        return jsonify({"error": str(exc)}), 500
+
+
 @nps_bp.route("/remind/targeted", methods=["POST"])
 @role_required("admin", "editor")
 def send_targeted_reminder():
