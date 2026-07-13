@@ -8,8 +8,13 @@ ASR entirely. Onboarding SLA ~7 days.
 
 ## Status
 
-**Ticket filed: D490637982** — https://t.corp.amazon.com/D490637982
-(SIGNAL queue, Unified Communications / AmazonUC-SIGNAL / All).
+**Onboarding ticket: D490668297** (Opus-SLAB-Onboarding template, Prod) —
+https://t.corp.amazon.com/D490668297/overview — status Assigned. Method:
+OpusUsersGetSlackIDFromAlias; security review N/A. Verify Role ARN +
+Environment=Prod under the Information tab. Awaiting prod API key comment.
+
+Initial general query ticket (superseded): **D490637982** —
+https://t.corp.amazon.com/D490637982
 
 SIGNAL response: technical specs are on the KB page
 https://w.amazon.com/bin/view/AmazonUC/SIGNAL/OPUS/KB/SLAB
