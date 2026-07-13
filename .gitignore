@@ -36,3 +36,6 @@ bandit-shepherd.csv
 bandit-triage.md
 final_output*.json
 check_feedback_issues.py
+
+# Local throwaway clone used for reviewer self-serve testing
+NPSSurveyAutomation/

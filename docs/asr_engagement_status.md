@@ -29,6 +29,31 @@ platform rule. Bot only calls `users.lookupByEmail` and `chat.postMessage`
 — no event subscriptions, no callbacks. Full reasoning in
 `docs/slack_talos_review_request.md`.
 
+## ACTIVE PIVOT — exit Red by dropping `users:read` (SLAB)
+
+Per AmazonUC-SIGNAL/OPUS guidance (Farzin Nickman): `users:read` is
+classified High-risk because it grants the full Enterprise Grid directory,
+regardless of us only calling `users.lookupByEmail`. There is **no 1P
+shortcut** — but we can **avoid the Red ASR entirely** by dropping
+`users:read` and using SLAB's `OpusUsersGetSlackIDFromAlias` API
+(alias→Slack ID, SigV4 + API key, internal Amazon service). Their Red ASR
+took ~7 weeks; SLAB onboarding SLA is ~7 days.
+
+Decision: pursue SLAB in parallel while keeping the Red ASR warm as
+fallback. Once SLAB is live and `users:read` removed, ask OPUS/ASR to
+confirm reclassification out of Red.
+
+Progress:
+- [x] `app/services/slab_client.py` written (alias derivation + SigV4 +
+      API-key SLAB lookup; endpoint/schema are env-overridable pending
+      onboarding). 13 unit tests passing.
+- [ ] Fire SLAB onboarding request — `docs/slab_onboarding_request.md`.
+- [ ] Confirm API contract (endpoint, request/response fields, service).
+- [ ] Create `nps-survey/slab-api-key` secret + IAM grant.
+- [ ] Swap the two lookup sites in `nps_distribution_service.py`.
+- [ ] Remove `users:read` from the Slack app; keep only `chat:write`.
+- [ ] OPUS/ASR confirm reclassification out of Red.
+
 ## Task status
 
 ### Application Owner tasks — DONE
