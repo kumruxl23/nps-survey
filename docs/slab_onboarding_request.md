@@ -75,17 +75,22 @@ change, not a code change:
 
 ## Onboarding flow (from the SLAB KB)
 
-Two separate onboardings, each a private ticket with a **Role ARN** field
-(`arn:aws:iam::399016860083:role/nps-survey-ec2-role`):
+Decision: **onboard straight to Prod, skip Gamma.** For
+`OpusUsersGetSlackIDFromAlias`, prod needs **no appsec review**, and Gamma
+only resolves users in the Slack sandbox grid (and requires a Sandbox ID /
+provisioned sandbox) — useless for resolving real stakeholders. So Gamma
+adds setup for no value here.
 
-1. **Pre-prod (Gamma)** — no security approval needed. Returns a Gamma API
-   key. NOTE: Gamma resolves only sandbox-grid users (JIT-provisioned,
-   ~daily refresh), so some aliases return not-found there — expected.
-2. **Prod** — separate ticket. `OpusUsersGetSlackIDFromAlias` needs **no
-   appsec review** (only admin APIs do). Returns a DIFFERENT prod API key.
+Onboarding template (private SIM), custom fields:
+- **Role arn:** `arn:aws:iam::399016860083:role/nps-survey-ec2-role`
+- **Environment:** Prod
+- **Nonadminappuserid:** blank (admin-methods only)
+- **Sandbox id:** blank (Gamma only)
+- Security-review line: N/A (only OpusUsersGetSlackIDFromAlias)
 
-Prereq for both: the IAM role must already have `execute-api:Invoke`
-(`infra/iam-policies/AllowInvokeSlab.json`).
+Prereq: the IAM role must already have `execute-api:Invoke`
+(`infra/iam-policies/AllowInvokeSlab.json`). Prod returns the API key as a
+ticket comment; store in Secrets Manager `nps-survey/slab-api-key`.
 
 ## API contract (from KB; confirm field names from Python client docs)
 
