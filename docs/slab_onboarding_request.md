@@ -73,19 +73,46 @@ change, not a code change:
 | `REQUEST_ALIAS_FIELD` | JSON field carrying the alias | Confirm (assumed `alias`) |
 | `RESPONSE_SLACK_ID_FIELD` | JSON field with the Slack ID | Confirm (assumed `slackId`) |
 
+## Onboarding flow (from the SLAB KB)
+
+Two separate onboardings, each a private ticket with a **Role ARN** field
+(`arn:aws:iam::399016860083:role/nps-survey-ec2-role`):
+
+1. **Pre-prod (Gamma)** — no security approval needed. Returns a Gamma API
+   key. NOTE: Gamma resolves only sandbox-grid users (JIT-provisioned,
+   ~daily refresh), so some aliases return not-found there — expected.
+2. **Prod** — separate ticket. `OpusUsersGetSlackIDFromAlias` needs **no
+   appsec review** (only admin APIs do). Returns a DIFFERENT prod API key.
+
+Prereq for both: the IAM role must already have `execute-api:Invoke`
+(`infra/iam-policies/AllowInvokeSlab.json`).
+
+## API contract (from KB; confirm field names from Python client docs)
+
+- **Batch**: up to **600 aliases** per call (dupes count toward the limit).
+- Aliases are case-insensitive; returned IDs are lowercase-keyed.
+- Response: `ok` (bool), `aliasesNotFound` (definitive misses — don't
+  retry), `aliasesUnprocessed` (transient — safe to retry). Success-map
+  field name still to confirm (code defaults to `slackIds`, configurable).
+
 ## Code swap (once onboarded)
 
-In `app/services/nps_distribution_service.py`, both Slack lookup sites
-change from email→Slack to alias→SLAB:
+`app/services/slab_client.py` is written for the batch contract with a
+single-alias convenience wrapper. Two options for
+`nps_distribution_service.py`:
 
+Simple (per-nomination, keeps current caching):
 ```python
-# before
-lookup_email = base_email(nomination.email)
-slack_user_id = slack_client.lookup_user_by_email(lookup_email, bot_token)
-
 # after
 alias = slab_client.alias_from_email(nomination.email)
 slack_user_id = slab_client.lookup_slack_id_by_alias(alias)
+```
+
+Better (batch — one call per ~600 non-respondents):
+```python
+aliases = [slab_client.alias_from_email(n.email) for n in non_respondents]
+id_map = slab_client.lookup_slack_ids_by_aliases(aliases)
+# then per nomination: slack_user_id = id_map.get(alias)
 ```
 
 - Catch `slab_client.SlackUserNotFoundError` (same handling as today).

@@ -14,6 +14,16 @@ The role should end up with:
 - `AllowNpsSESSend` (custom, this dir) — send email from the verified domain only
 - `AllowReadAsanaPAT` (existing inline) — `secretsmanager:GetSecretValue` on `nps-survey/asana-pat*` only
 - `AllowReadStakeholderWorkbook` (existing inline) — `s3:GetObject` on `whs-cpt-nps-survey/*` only
+- `AllowInvokeSlab` (custom, this dir) — `execute-api:Invoke` for the SLAB
+  API (alias→Slack ID lookup, replaces Slack `users:read`)
+- `AllowReadSlabApiKey` (add as inline when onboarded) —
+  `secretsmanager:GetSecretValue` on `nps-survey/slab-api-key*` only
+
+> **Scope-down TODO for `AllowInvokeSlab`:** the resource is currently
+> `arn:aws:execute-api:*:*:*` because the SLAB API Gateway ARN isn't
+> known until onboarding. Once the Gamma/Prod endpoints are provided
+> (ticket D490637982), replace the wildcard with the specific
+> `arn:aws:execute-api:<region>:<acct>:<api-id>/*` to stay least-privilege.
 
 To remove:
 
