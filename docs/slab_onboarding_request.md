@@ -9,9 +9,21 @@ ASR entirely. Onboarding SLA ~7 days.
 ## Status
 
 **Ticket filed: D490637982** — https://t.corp.amazon.com/D490637982
-(SIGNAL queue, Unified Communications / AmazonUC-SIGNAL / All). Awaiting
-the API contract (endpoint, request/response schema, SigV4 service name,
-API-key process, role-ARN allowlisting).
+(SIGNAL queue, Unified Communications / AmazonUC-SIGNAL / All).
+
+SIGNAL response: technical specs are on the KB page
+https://w.amazon.com/bin/view/AmazonUC/SIGNAL/OPUS/KB/SLAB
+Confirmed: API key is passed as an `x-api-key` header (matches
+`slab_client.py`); one ARN per ticket (ours provided); include ASR ref
+WHS_AIFA-1763314908 for production access; API key issued in ticket
+correspondence after approval.
+
+Still needed from the KB / ticket to finalize:
+- API endpoint URL for OpusUsersGetSlackIDFromAlias
+- Request/response schema (alias-in field, slack-id-out field)
+- SigV4 service name + region
+- Throttling/usage limits
+- API key (store in Secrets Manager `nps-survey/slab-api-key`)
 
 ## Contact route (confirmed)
 
