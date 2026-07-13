@@ -6,6 +6,15 @@ the high-risk `users:read` scope. Per AmazonUC-SIGNAL/OPUS guidance
 (Farzin Nickman), dropping `users:read` in favour of SLAB avoids the Red
 ASR entirely. Onboarding SLA ~7 days.
 
+## Contact route (confirmed)
+
+Primary path is a **SIGNAL queue ticket** (~7-day SLA). OPUS Office Hours
+are booked out until mid-August, and the technical specs
+(endpoint/schema/service name/API-key process) are NOT documented in the
+channel — the SIGNAL team provides them via the ticket. Warm contact:
+Farzin Nickman (answered in the OPUS channel); tag him with the ticket
+link to accelerate.
+
 ## Request to send (AmazonUC-SIGNAL / OPUS / SLAB queue)
 
 > Requesting onboarding to SLAB `OpusUsersGetSlackIDFromAlias`.
