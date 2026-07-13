@@ -32,6 +32,14 @@ def _reset_state(monkeypatch):
     monkeypatch.setenv("ASANA_CLIENT_SECRET", "test-client-secret")
     # Make sure no PAT leaks in from the host environment
     monkeypatch.delenv("ASANA_PAT", raising=False)
+    # Keep tests hermetic: fake AWS creds so the Secrets Manager PAT
+    # fallback can never reach a real account when the developer/CI has
+    # live credentials loaded. Tests that exercise Secrets Manager patch
+    # boto3.client directly, so they're unaffected.
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     asana_client.clear_tokens()
     yield
     asana_client.clear_tokens()
