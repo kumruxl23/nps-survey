@@ -6,6 +6,13 @@ the high-risk `users:read` scope. Per AmazonUC-SIGNAL/OPUS guidance
 (Farzin Nickman), dropping `users:read` in favour of SLAB avoids the Red
 ASR entirely. Onboarding SLA ~7 days.
 
+## Status
+
+**Ticket filed: D490637982** — https://t.corp.amazon.com/D490637982
+(SIGNAL queue, Unified Communications / AmazonUC-SIGNAL / All). Awaiting
+the API contract (endpoint, request/response schema, SigV4 service name,
+API-key process, role-ARN allowlisting).
+
 ## Contact route (confirmed)
 
 Primary path is a **SIGNAL queue ticket** (~7-day SLA). OPUS Office Hours

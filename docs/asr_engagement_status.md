@@ -47,7 +47,8 @@ Progress:
 - [x] `app/services/slab_client.py` written (alias derivation + SigV4 +
       API-key SLAB lookup; endpoint/schema are env-overridable pending
       onboarding). 13 unit tests passing.
-- [ ] Fire SLAB onboarding request — `docs/slab_onboarding_request.md`.
+- [x] Fire SLAB onboarding request — SIGNAL ticket **D490637982**
+      (https://t.corp.amazon.com/D490637982). Awaiting API contract.
 - [ ] Confirm API contract (endpoint, request/response fields, service).
 - [ ] Create `nps-survey/slab-api-key` secret + IAM grant.
 - [ ] Swap the two lookup sites in `nps_distribution_service.py`.
