@@ -13,7 +13,7 @@ __pycache__/
 # Infra: deployment scripts may contain account IDs, env vars, secrets.
 # Keep ignored except for IAM policy JSON which is referenced by ASR
 # and is safe to publish (resource ARNs only, no secrets).
-infra/
+infra/*
 !infra/iam-policies/
 !infra/iam-policies/**
 
