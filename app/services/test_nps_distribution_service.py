@@ -423,3 +423,26 @@ class TestSendTestReminder:
         # No org resolved -> email-only path; ensure no reminder logs were
         # written (a test reminder must not pollute real cycle data).
         assert nps_reminder_log_repo.list_logs("whs_cpt_in", "nope") == []
+
+
+class TestDemoSafeMode:
+    """NPS_DEMO_SAFE blocks reminders to real stakeholders; test reminder still works."""
+
+    def test_send_reminder_blocked(self, monkeypatch):
+        monkeypatch.setenv("NPS_DEMO_SAFE", "1")
+        with pytest.raises(ValueError, match="Demo-safe"):
+            nps_distribution_service.send_reminder("whs_cpt_in", "cycle-1")
+
+    def test_targeted_reminder_blocked(self, monkeypatch):
+        monkeypatch.setenv("NPS_DEMO_SAFE", "1")
+        with pytest.raises(ValueError, match="Demo-safe"):
+            nps_distribution_service.send_targeted_reminder(
+                "whs_cpt_in", "cycle-1", ["a@amazon.com"]
+            )
+
+    @patch("app.services.nps_distribution_service.email_client")
+    def test_test_reminder_still_works_in_demo_safe(self, mock_email, monkeypatch):
+        monkeypatch.setenv("NPS_DEMO_SAFE", "1")
+        mock_email.send_bcc_email.return_value = EmailResult(ok=True)
+        result = nps_distribution_service.send_test_reminder()
+        assert result["email_sent_count"] == 1

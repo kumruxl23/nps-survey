@@ -36,6 +36,11 @@ os.environ.pop("NPS_ENSURE_TABLES", None)
 # Hard safety: never start the reminder scheduler in demo mode.
 os.environ["NPS_DISABLE_SCHEDULER"] = "1"
 
+# Hard safety: block reminders to REAL stakeholders during the demo. Only
+# the "Test Reminder (to me)" path works while this is on. An accidental
+# click on Send / Send Reminder to Pending will be refused, not sent.
+os.environ["NPS_DEMO_SAFE"] = "1"
+
 from app import create_app  # noqa: E402
 
 app = create_app()
@@ -47,7 +52,9 @@ if __name__ == "__main__":
     print("=" * 64)
     print()
     print("  Region:       ap-south-1 (LIVE DynamoDB)")
-    print("  Scheduler:    DISABLED (no reminder emails will be sent)")
+    print("  Scheduler:    DISABLED (no scheduled reminders)")
+    print("  Demo-safe:    ON  (real-stakeholder reminders BLOCKED;")
+    print("                     only '🧪 Test Reminder (to me)' works)")
     print("  Dashboard:    http://localhost:5000/nps/dashboard")
     print("  Orgs:         http://localhost:5000/nps/orgs/view")
     print("  Nominations:  http://localhost:5000/nps/nominations/view")

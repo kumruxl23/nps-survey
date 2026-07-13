@@ -171,6 +171,9 @@ def send_reminder(
     Raises:
         ValueError: If org config or cycle is not found.
     """
+    if _demo_safe():
+        raise ValueError(_DEMO_SAFE_MESSAGE)
+
     org = nps_org_config_service.get_org(org_id)
     if org is None:
         raise ValueError(f"Org '{org_id}' not found")
@@ -332,6 +335,9 @@ def send_targeted_reminder(
     Raises:
         ValueError: If org config or cycle is not found.
     """
+    if _demo_safe():
+        raise ValueError(_DEMO_SAFE_MESSAGE)
+
     org = nps_org_config_service.get_org(org_id)
     if org is None:
         raise ValueError(f"Org '{org_id}' not found")
@@ -459,6 +465,22 @@ def send_targeted_reminder(
 
 
 DEFAULT_TEST_REMINDER_RECIPIENT = "kumruxl@amazon.com"
+
+
+def _demo_safe() -> bool:
+    """True when NPS_DEMO_SAFE is set — blocks reminders to REAL stakeholders.
+
+    Used during live demos against real data so an accidental click on
+    'Send Reminder to Pending' / per-leader / per-individual never emails
+    real people. The self-test reminder (send_test_reminder) is unaffected.
+    """
+    return os.environ.get("NPS_DEMO_SAFE", "").lower() in ("1", "true", "yes")
+
+
+_DEMO_SAFE_MESSAGE = (
+    "Demo-safe mode is ON (NPS_DEMO_SAFE) — reminders to real stakeholders "
+    "are disabled. Use the '🧪 Test Reminder (to me)' button instead."
+)
 
 
 def send_test_reminder(org_id: str = None, cycle_id: str = None, recipient: str = None) -> dict:
