@@ -48,7 +48,9 @@ Progress:
       API-key SLAB lookup; endpoint/schema are env-overridable pending
       onboarding). 13 unit tests passing.
 - [x] Fire SLAB onboarding — Opus-SLAB-Onboarding ticket **D490668297**
-      (Prod, https://t.corp.amazon.com/D490668297). Awaiting prod API key.
+      (Prod, https://t.corp.amazon.com/D490668297).
+      Onboarding **CR-289008613 MERGED** (role on prod allowlist for
+      OpusUsersGetSlackIDFromAlias). Awaiting pipeline deploy → prod API key.
       (Initial general query D490637982, superseded.)
 - [ ] Confirm API contract (endpoint, request/response fields, service).
 - [ ] Create `nps-survey/slab-api-key` secret + IAM grant.

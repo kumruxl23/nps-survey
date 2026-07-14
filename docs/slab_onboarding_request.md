@@ -23,6 +23,19 @@ Confirmed: API key is passed as an `x-api-key` header (matches
 WHS_AIFA-1763314908 for production access; API key issued in ticket
 correspondence after approval.
 
+**Onboarding CR MERGED: CR-289008613** (OpusSLABCDK, "onboard 2 SLAB
+clients Phase B"). Our role `arn:aws:iam::399016860083:role/nps-survey-ec2-role`
+added to prod allowlist for `OpusUsersGetSlackIDFromAlias`
+(allowAccessToProdEndpoints: true). Config at `lib/config/clientDetails.ts`;
+method enum `SlabApiMethod.UsersGetSlackIDFromAlias`. GetSlackID needs NO
+AppSec review (confirmed in CR). **Next: pipeline deploy to prod → API key
+minted and posted to ticket D490668297.**
+
+Still needed to finalize our code:
+- Prod endpoint URL + SigV4 region (from KB / OpusSLABClient docs)
+- Confirm request/response field names (aliases-in, results-out)
+- The prod API key (store in Secrets Manager nps-survey/slab-api-key)
+
 Still needed from the KB / ticket to finalize:
 - API endpoint URL for OpusUsersGetSlackIDFromAlias
 - Request/response schema (alias-in field, slack-id-out field)
