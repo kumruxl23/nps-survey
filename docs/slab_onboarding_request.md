@@ -31,10 +31,40 @@ method enum `SlabApiMethod.UsersGetSlackIDFromAlias`. GetSlackID needs NO
 AppSec review (confirmed in CR). **Next: pipeline deploy to prod → API key
 minted and posted to ticket D490668297.**
 
-Still needed to finalize our code:
-- Prod endpoint URL + SigV4 region (from KB / OpusSLABClient docs)
-- Confirm request/response field names (aliases-in, results-out)
-- The prod API key (store in Secrets Manager nps-survey/slab-api-key)
+## KEY FINDING — supported integration is the OpusSLABPythonSDK (Brazil/Coral)
+
+From the SLAB Python SDK README, the intended integration is NOT a raw
+HTTPS call:
+- `OpusSLABPythonSDK` is a **Brazil version-set package** (declare it as a
+  direct dependency + merge into the version set).
+- Endpoint is resolved at runtime from **coral-config**
+  (`conf.get("OpusSLAB", "Base.Prod")["httpEndpoint"]["url"]`) — no static
+  URL to hardcode; needs a Brazil/Apollo runtime with coral-config.
+- Signing is **SigV4a** (`signature_version="v4a"`, `region="global"`),
+  requires `Aws-crt-python`. (Our interim `slab_client.py` uses plain v4.)
+- Client call: `client.opus_users_get_slack_id_from_alias(userAliases=[...])`
+  — request field is **`userAliases`** (confirmed). Response has `ok` and
+  `ResponseMetadata.HTTPStatusCode`.
+- API key via `x-api-key` header (confirmed, matches our code).
+
+### Decision: SDK-via-pipeline vs hand-rolled interim
+
+- **Option A (recommended):** adopt the SDK as part of the Brazil/Apollo
+  pipeline conversion (SDO Phase 3). Clean, supported, and satisfies the
+  certifier's pipeline ask in one stroke.
+- **Option B (interim):** keep the hand-rolled `slab_client.py`, but then
+  we need (1) the raw prod endpoint URL (from OpusSLABClientConfig / ask on
+  ticket) and (2) switch signing to SigV4a (`aws-crt-python`). Fragile;
+  diverges from supported usage.
+
+Slack DMs are NOT needed for the demo (email-only), so no rush. Prefer
+Option A alongside the pipeline work.
+
+Still needed either way:
+- Prod API key (store in Secrets Manager nps-survey/slab-api-key) — RECEIVED
+  (in ticket D490668297); store securely + rotate later (shared in plaintext).
+- Option B only: raw prod endpoint URL + SigV4a signing.
+- Confirm response results field name (from the OpenAPI / index.html).
 
 Still needed from the KB / ticket to finalize:
 - API endpoint URL for OpusUsersGetSlackIDFromAlias

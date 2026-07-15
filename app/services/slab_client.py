@@ -46,9 +46,14 @@ DEFAULT_SLAB_SERVICE_NAME = "execute-api"
 DEFAULT_SLAB_API_KEY_SECRET_ID = "nps-survey/slab-api-key"
 API_KEY_SECRET_KEY = "SLAB_API_KEY"
 
-# Request/response field names — confirm from the Python client docs.
-REQUEST_ALIASES_FIELD = "aliases"
-RESPONSE_RESULTS_FIELD = "slackIds"          # map/list of resolved results
+# Request field CONFIRMED from OpusSLABPythonSDK README: `userAliases`.
+# NOTE: the SUPPORTED integration is the OpusSLABPythonSDK Brazil/Coral
+# client (boto3 "opusslab" service, endpoint from coral-config, SigV4a
+# signing via aws-crt-python). This hand-rolled HTTPS client is an INTERIM
+# option only; it needs the raw prod endpoint URL and SigV4a (not the v4
+# used below). See docs/slab_onboarding_request.md for the decision.
+REQUEST_ALIASES_FIELD = "userAliases"
+RESPONSE_RESULTS_FIELD = "slackIds"          # map/list of resolved results (confirm via OpenAPI)
 RESPONSE_NOT_FOUND_FIELD = "aliasesNotFound"
 RESPONSE_UNPROCESSED_FIELD = "aliasesUnprocessed"
 
