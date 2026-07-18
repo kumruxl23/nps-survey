@@ -60,11 +60,20 @@ Progress:
 
 ## Task status
 
+### Re-profiled for SLAB reclassification (2026-07)
+
+Profiling re-submitted (32 answers) + DI/threat model updated to
+**v279** and linked in ASR. Key answers now: "share non-public data with
+3P → No", "3P component hosted → Not Applicable" → **TPS profile dropped**.
+Still Red/Ring-2 (credentials/encryption-keys = Yes + Confidential data +
+Slack SDK keep it Red); final reclassification is the reviewer's call
+after they review the updated DI. See `docs/asr_reprofiling_answers.md`.
+
 ### Application Owner tasks — DONE
 
 | Task | Status | Evidence |
 |---|---|---|
-| Threat Model (Baseline) | ✅ Complete | DI project NPSSurveyReminders, 14 threats triaged (13 Mitigated + 1 False Positive), exported HTML uploaded |
+| Threat Model (Baseline) | ✅ Complete | DI project NPSSurveyReminders, updated to v279 (SLAB internal lookup; Slack reduced to chat.postMessage/chat:write), exported HTML attached |
 | Permissions (Red) | ✅ Complete | IAM role `nps-survey-ec2-role` scoped to least privilege; AmazonDynamoDBFullAccess + AmazonSESFullAccess replaced with AllowNpsDynamoDB + AllowNpsSESSend (see `infra/iam-policies/`) |
 | Incident Response Plan (Red) | ✅ Complete | `docs/incident_response_plan.md` |
 | Third Party Security Review | ✅ Complete | TPTA0027224 (Asana) + TPTA0050664 (Slack), both Tier 4, "Amazon 3P Security Bar Met" |
