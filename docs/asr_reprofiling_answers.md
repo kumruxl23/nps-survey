@@ -85,3 +85,46 @@ The code swap to SLAB is Option A (via the pipeline/Brazil conversion,
 SDO Phase 3). Interim state until then is **email-only** (Slack DMs off),
 which is already not-Red on its own. Re-profiling now reflects the target
 design so the classification is corrected ahead of the wiring.
+
+
+## DI threat-marking — copy/paste justifications
+
+Paste these verbatim when re-marking threats in Design Inspector after the
+re-analysis.
+
+**Threats referencing the old Slack directory lookup / `users:read`
+(mark → Not Applicable):**
+> Not Applicable — the `users:read` / `users:read.email` scopes were
+> removed. Slack user-ID resolution now uses the internal Amazon OPUS SLAB
+> API (`OpusUsersGetSlackIDFromAlias`); the app no longer queries the Slack
+> directory and no longer holds any high-risk Slack scope.
+
+**Spoofing of the SLAB endpoint (mark → Mitigated):**
+> Mitigated — calls go to the fixed OPUS SLAB API Gateway URL over TLS;
+> requests are SigV4a-signed using the EC2 instance role
+> (`nps-survey-ec2-role`) plus an `x-api-key` header. No unauthenticated
+> path.
+
+**Tampering in transit, app → SLAB (mark → Mitigated):**
+> Mitigated — HTTPS with SigV4a request signing; payload integrity covered
+> by the signature.
+
+**Information disclosure of the SLAB API key (mark → Mitigated):**
+> Mitigated — the API key is stored in AWS Secrets Manager
+> (`nps-survey/slab-api-key`), readable only by `nps-survey-ec2-role` via
+> the `AllowReadSlabApiKey` policy. Never logged; rotation via ticket to
+> AmazonUC-SIGNAL / Opus-Issues.
+
+**Slack `chat.postMessage` (retained, mark → Mitigated):**
+> Mitigated — outbound-only `chat:write`; the bot posts a 1:1 DM
+> (survey link) and reads/subscribes to nothing. No Slack callback/event
+> surface exists. Per-org bot token stored in DynamoDB, read-only to the
+> EC2 role, redacted in the admin UI.
+
+## Local reference diagram
+
+`docs/nps_architecture_diagram.drawio` has been updated to match the
+post-SLAB design (SLAB as an internal-Amazon boundary, Slack reduced to
+`chat.postMessage`/`chat:write`, Secrets Manager listing the SLAB key).
+This is a repo reference only — the authoritative diagram is the one you
+publish in Design Inspector.

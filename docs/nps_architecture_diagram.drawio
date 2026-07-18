@@ -38,7 +38,7 @@
         </mxCell>
 
         <!-- Secrets Manager -->
-        <mxCell id="sm" value="Secrets Manager&#10;nps-survey/asana-pat" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#B71C1C;fontSize=11" vertex="1" parent="1">
+        <mxCell id="sm" value="Secrets Manager&#10;asana-pat, slack-bot-token,&#10;nps-survey/slab-api-key" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#B71C1C;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="420" y="410" width="160" height="80" as="geometry" />
         </mxCell>
 
@@ -61,7 +61,7 @@
         <mxCell id="slack-zone" value="Slack (3rd-party SaaS)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#F3E5F5;strokeColor=#4A148C;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
           <mxGeometry x="950" y="120" width="120" height="180" as="geometry" />
         </mxCell>
-        <mxCell id="slack" value="Slack API&#10;chat.postMessage&#10;users.lookupByEmail" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;fontSize=11" vertex="1" parent="1">
+        <mxCell id="slack" value="Slack API&#10;chat.postMessage ONLY&#10;scope: chat:write" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="965" y="160" width="100" height="100" as="geometry" />
         </mxCell>
 
@@ -71,6 +71,14 @@
         </mxCell>
         <mxCell id="asana" value="Asana API&#10;custom-field reads&#10;PAT auth" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#B71C1C;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="965" y="380" width="100" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Trust Boundary: OPUS SLAB (internal Amazon service) — NOT 3rd party -->
+        <mxCell id="slab-zone" value="AmazonUC / OPUS SLAB (internal Amazon service)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
+          <mxGeometry x="60" y="360" width="280" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="slab" value="OPUS SLAB API&#10;opusslab (API Gateway, SigV4a)&#10;OpusUsersGetSlackIDFromAlias" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="85" y="400" width="230" height="90" as="geometry" />
         </mxCell>
 
         <!-- Edges -->
@@ -102,7 +110,11 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <mxCell id="e8" value="HTTPS / Bearer (bot token)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="slack">
+        <mxCell id="e8" value="HTTPS / Bearer (bot token)&#10;chat.postMessage only (Slack user ID + DM body)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="slack">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e10" value="HTTPS / SigV4a + x-api-key&#10;alias in / Slack user ID out (internal)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="slab">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
