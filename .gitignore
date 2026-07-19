@@ -36,6 +36,7 @@ SETUP_CHECKLIST.md
 NPSSurveyReminders-*.html
 /index.html
 /README.md
+Config-val
 
 # Ad-hoc tool output / scratch (may contain PII; never publish to mirror)
 bandit-results.json
