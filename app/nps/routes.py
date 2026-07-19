@@ -5,10 +5,11 @@ distribution, reminders, ASANA webhook processing, and dashboard data.
 All routes delegate to the service layer and return JSON responses.
 """
 
+import functools
 import logging
 import os
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 
 from app.services import (
     nps_cycle_service,
@@ -18,6 +19,7 @@ from app.services import (
     nps_nomination_service,
     nps_org_config_service,
     nps_response_service,
+    nps_share_link_service,
 )
 from app.services import asana_client
 from app.services import file_import_service
@@ -286,6 +288,28 @@ def remove_nomination():
 # ---------------------------------------------------------------------------
 
 
+def login_or_share_token(f):
+    """Allow a logged-in session OR a valid nomination-form share token.
+
+    The token comes from the ``token`` query parameter (capability URL),
+    so leaders without app accounts can use the form via a shared link.
+    Only the nomination form routes use this — everything else stays
+    session-only.
+    """
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        if "user" in session:
+            return f(*args, **kwargs)
+        if nps_share_link_service.verify_token(request.args.get("token", "")):
+            return f(*args, **kwargs)
+        if request.is_json or request.headers.get("Accept") == "application/json":
+            return jsonify({"error": "Authentication required"}), 401
+        return redirect(url_for("auth.login_page"))
+
+    return wrapper
+
+
 @nps_bp.route("/leaders", methods=["GET"])
 @login_required
 def list_leaders():
@@ -324,14 +348,22 @@ def remove_leader():
 
 
 @nps_bp.route("/nominate/view", methods=["GET"])
-@login_required
+@login_or_share_token
 def nominate_view():
     """Render the self-serve leader nomination form."""
     return render_template("nps_leader_nominate.html")
 
 
+@nps_bp.route("/nominate/share-link/rotate", methods=["POST"])
+@role_required("admin")
+def rotate_share_link():
+    """Invalidate the current share link and issue a fresh one."""
+    token = nps_share_link_service.rotate_token()
+    return jsonify({"share_path": f"/nps/nominate/view?token={token}"})
+
+
 @nps_bp.route("/nominate/context", methods=["GET"])
-@login_required
+@login_or_share_token
 def nominate_context():
     """Data the nomination form needs: orgs with active cycles + leaders."""
     try:
@@ -351,14 +383,20 @@ def nominate_context():
                     else None
                 ),
             })
-        return jsonify({"orgs": orgs, "leaders": nps_leader_service.list_leaders()})
+        payload = {"orgs": orgs, "leaders": nps_leader_service.list_leaders()}
+        # Admins/editors get the shareable capability URL for the form so
+        # they can send it to leaders (who have no app accounts).
+        if session.get("user", {}).get("role") in ("admin", "editor"):
+            token = nps_share_link_service.get_or_create_token()
+            payload["share_path"] = f"/nps/nominate/view?token={token}"
+        return jsonify(payload)
     except Exception as exc:
         logger.exception("Error building nomination form context")
         return jsonify({"error": str(exc)}), 500
 
 
 @nps_bp.route("/nominate/list", methods=["GET"])
-@login_required
+@login_or_share_token
 def nominate_list():
     """List active-cycle nominations under one leader (for the form's table)."""
     try:
@@ -390,7 +428,7 @@ def nominate_list():
 
 
 @nps_bp.route("/nominate/submit", methods=["POST"])
-@login_required
+@login_or_share_token
 def nominate_submit():
     """Submit a stakeholder nomination from the self-serve form.
 
@@ -434,7 +472,7 @@ def nominate_submit():
 
 
 @nps_bp.route("/nominate/remove", methods=["POST"])
-@login_required
+@login_or_share_token
 def nominate_remove():
     """Remove a form nomination (admin/editor, the nominator, or the leader)."""
     try:

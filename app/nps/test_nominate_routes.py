@@ -169,3 +169,78 @@ class TestLeaderRosterRoutes:
         resp = client.get("/nps/nominate/view")
         assert resp.status_code == 200
         assert b"Nominate Stakeholders" in resp.data
+
+
+class TestShareLink:
+    def _logout(self, client):
+        with client.session_transaction() as sess:
+            sess.pop("user", None)
+
+    def _admin(self, client):
+        with client.session_transaction() as sess:
+            sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
+
+    def _get_token(self, client):
+        self._admin(client)
+        resp = client.get("/nps/nominate/context")
+        share_path = resp.get_json()["share_path"]
+        self._logout(client)
+        return share_path.split("token=", 1)[1]
+
+    def test_admin_context_includes_share_path(self, client):
+        self._admin(client)
+        body = client.get("/nps/nominate/context").get_json()
+        assert body["share_path"].startswith("/nps/nominate/view?token=")
+
+    def test_viewer_context_has_no_share_path(self, client):
+        body = client.get("/nps/nominate/context").get_json()
+        assert "share_path" not in body
+
+    def test_token_grants_form_access_without_login(self, client):
+        token = self._get_token(client)
+        # Page renders
+        resp = client.get(f"/nps/nominate/view?token={token}")
+        assert resp.status_code == 200
+        # Context works, but never leaks the share link to token users
+        resp = client.get(f"/nps/nominate/context?token={token}")
+        assert resp.status_code == 200
+        assert "share_path" not in resp.get_json()
+        # Submit works
+        resp = client.post(f"/nps/nominate/submit?token={token}", json={
+            "org_id": _ORG,
+            "leader": "Navjyot Bhatia",
+            "nominated_by": "leaderx",
+            "stakeholder_alias": "tokuser",
+            "name": "Token User",
+        })
+        assert resp.status_code == 201
+
+    def test_bad_token_rejected(self, client):
+        self._logout(client)
+        resp = client.post("/nps/nominate/submit?token=wrong", json={"org_id": _ORG})
+        assert resp.status_code == 401
+        # Page request redirects to login instead of erroring
+        resp = client.get("/nps/nominate/view?token=wrong")
+        assert resp.status_code == 302
+
+    def test_token_does_not_open_other_routes(self, client):
+        token = self._get_token(client)
+        resp = client.get(
+            f"/nps/nominations?org_id={_ORG}&cycle_id={_CYCLE}&token={token}",
+            headers={"Accept": "application/json"},
+        )
+        assert resp.status_code == 401
+
+    def test_rotate_invalidates_old_token(self, client):
+        token = self._get_token(client)
+        self._admin(client)
+        resp = client.post("/nps/nominate/share-link/rotate")
+        assert resp.status_code == 200
+        new_token = resp.get_json()["share_path"].split("token=", 1)[1]
+        self._logout(client)
+        assert client.get(f"/nps/nominate/view?token={token}").status_code == 302
+        assert client.get(f"/nps/nominate/view?token={new_token}").status_code == 200
+
+    def test_rotate_requires_admin(self, client):
+        resp = client.post("/nps/nominate/share-link/rotate")
+        assert resp.status_code == 403

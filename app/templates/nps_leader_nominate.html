@@ -4,7 +4,12 @@
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-lg-8">
-    <h4 class="mb-1">Nominate Stakeholders</h4>
+    <div class="d-flex justify-content-between align-items-start">
+      <h4 class="mb-1">Nominate Stakeholders</h4>
+      <button id="share-btn" class="btn btn-sm btn-outline-primary d-none">
+        &#128279; Copy share link
+      </button>
+    </div>
     <p class="text-muted mb-3">
       Select your leader (or your own name if you are the leader), then add the
       stakeholders you'd like to receive the NPS survey. One stakeholder can only
@@ -95,6 +100,16 @@ const orgSelect = document.getElementById('org-select');
 const leaderSelect = document.getElementById('leader-select');
 const cycleInfo = document.getElementById('cycle-info');
 let orgs = [];
+let leaderAliases = {};  // leader name -> roster alias
+let lastRows = [];       // cached rows for the current leader
+
+// Share-token support: when opened via a shared link (?token=...), pass the
+// token through on every API call so leaders without accounts can use the form.
+const SHARE_TOKEN = new URLSearchParams(location.search).get('token') || '';
+function withToken(url) {
+  if (!SHARE_TOKEN) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(SHARE_TOKEN);
+}
 
 function showAlert(kind, msg) {
   document.getElementById('alert-area').innerHTML =
@@ -105,12 +120,29 @@ function showAlert(kind, msg) {
 function aliasOf(email) { return (email || '').split('@')[0]; }
 
 async function loadContext() {
-  const res = await fetch('/nps/nominate/context');
+  const res = await fetch(withToken('/nps/nominate/context'));
   const data = await res.json();
+  if (data.share_path) {
+    const btn = document.getElementById('share-btn');
+    btn.classList.remove('d-none');
+    btn.addEventListener('click', async () => {
+      const url = location.origin + data.share_path;
+      try {
+        await navigator.clipboard.writeText(url);
+        showAlert('success', 'Share link copied — send it to your leaders. Anyone with the link can open this form (no login needed).');
+      } catch (e) {
+        prompt('Copy this link:', url);
+      }
+    });
+  }
   orgs = data.orgs || [];
   orgSelect.innerHTML = orgs.map(o => `<option value="${o.org_id}">${o.org_name}</option>`).join('');
+  // Default to the first org that actually has an active cycle.
+  const withCycle = orgs.find(o => o.active_cycle);
+  if (withCycle) orgSelect.value = withCycle.org_id;
   leaderSelect.innerHTML = '<option value="">-- select leader --</option>' +
     (data.leaders || []).map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+  leaderAliases = Object.fromEntries((data.leaders || []).map(l => [l.name, l.alias]));
   updateCycleInfo();
 }
 
@@ -135,27 +167,43 @@ async function refreshTable() {
   const body = document.getElementById('nominations-body');
   document.getElementById('table-leader-name').textContent = leader || 'selected leader';
   if (!leader || !orgSelect.value) {
+    lastRows = [];
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Select a leader to view nominations</td></tr>';
     return;
   }
-  const res = await fetch(`/nps/nominate/list?org_id=${encodeURIComponent(orgSelect.value)}&leader=${encodeURIComponent(leader)}`);
+  const res = await fetch(withToken(`/nps/nominate/list?org_id=${encodeURIComponent(orgSelect.value)}&leader=${encodeURIComponent(leader)}`));
   if (!res.ok) {
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Could not load nominations</td></tr>';
     return;
   }
-  const rows = await res.json();
-  if (!rows.length) {
+  lastRows = await res.json();
+  renderRows();
+}
+
+function canRemove(row) {
+  // The Remove option only appears for rows you own: you are the nominator,
+  // or you are the leader this list belongs to (matched by roster alias).
+  // Admins manage everything else from the Nominations admin page.
+  const me = document.getElementById('nominator-alias').value.trim().toLowerCase();
+  if (!me) return false;
+  if (row.nominated_by && row.nominated_by.toLowerCase() === me) return true;
+  return (leaderAliases[leaderSelect.value] || '') === me;
+}
+
+function renderRows() {
+  const body = document.getElementById('nominations-body');
+  if (!lastRows.length) {
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No nominations yet</td></tr>';
     return;
   }
-  body.innerHTML = rows.map(r => `
+  body.innerHTML = lastRows.map(r => `
     <tr>
       <td class="ps-3">${r.name}</td>
       <td>${aliasOf(r.email)}</td>
       <td>${r.designation || '-'}</td>
       <td>${r.nominated_by || '-'}</td>
       <td class="text-end pe-3">
-        <button class="btn btn-sm btn-outline-danger" onclick="removeNomination('${aliasOf(r.email)}')">Remove</button>
+        ${canRemove(r) ? `<button class="btn btn-sm btn-outline-danger" onclick="removeNomination('${aliasOf(r.email)}')">Remove</button>` : ''}
       </td>
     </tr>`).join('');
 }
@@ -174,7 +222,7 @@ async function submitNomination() {
     showAlert('warning', 'Your alias, stakeholder alias, and stakeholder name are required.');
     return;
   }
-  const res = await fetch('/nps/nominate/submit', {
+  const res = await fetch(withToken('/nps/nominate/submit'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -205,7 +253,7 @@ async function removeNomination(stakeholderAlias) {
     return;
   }
   if (!confirm(`Remove ${stakeholderAlias} from ${leaderSelect.value}'s nominations?`)) return;
-  const res = await fetch('/nps/nominate/remove', {
+  const res = await fetch(withToken('/nps/nominate/remove'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -222,6 +270,7 @@ async function removeNomination(stakeholderAlias) {
 
 orgSelect.addEventListener('change', () => { updateCycleInfo(); refreshTable(); });
 leaderSelect.addEventListener('change', refreshTable);
+document.getElementById('nominator-alias').addEventListener('input', renderRows);
 document.getElementById('submit-btn').addEventListener('click', submitNomination);
 loadContext();
 </script>

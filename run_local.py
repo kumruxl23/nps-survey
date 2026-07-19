@@ -235,6 +235,43 @@ def seed_demo_data():
         nps_nomination_repo.update_responded("whs_cpt_in", cid_q1, email)
     print(f"  Q1 2025: 100 nominated, 90 responded (closed)")
 
+    # ── Leader roster for the self-serve nomination form ───────────
+    from app.services import nps_leader_service
+
+    roster = [
+        ("sakau", "Sandeep Kaur"),
+        ("raabhas", "Abhas Rao"),
+        ("prsaab", "Abhishek Kumar Prasad"),
+        ("royindr", "Indrajeet Roy"),
+        ("mmuawan", "Malik Awan"),
+        ("maxpousv", "Max Pous Valls"),
+        ("nsbhatia", "Navjyot Bhatia"),
+        ("bhanidhi", "Nidhi Bhagat"),
+    ]
+    for alias, name in roster:
+        try:
+            nps_leader_service.add_leader(alias, name)
+        except ValueError:
+            pass
+    print(f"\n  Seeded {len(roster)} leaders for the nomination form")
+
+    # A few form-style nominations (with nominator) so /nps/nominate/view
+    # shows a small, realistic list under a leader without bulk demo data.
+    form_noms = [
+        ("jdoe", "John Doe", "Sr. Program Manager", "direct1"),
+        ("asmith", "Alice Smith", "Program Manager", "direct1"),
+        ("bpatel", "Bina Patel", "", "mmuawan"),
+    ]
+    for alias, name, desig, nominated_by in form_noms:
+        try:
+            nps_nomination_service.nominate_stakeholder(
+                "whs_cpt_in", cid, alias, name, "Malik Awan",
+                nominated_by=nominated_by, designation=desig,
+            )
+        except ValueError:
+            pass
+    print("  Seeded 3 form-style nominations under Malik Awan")
+
     # ── RISC ────────────────────────────────────────────────────────
     print("\n  Creating RISC org (no active cycle, no data)...")
     try:
@@ -267,6 +304,7 @@ if __name__ == "__main__":
     print("  Dashboard:    http://localhost:5000/nps/dashboard")
     print("  Orgs:         http://localhost:5000/nps/orgs/view")
     print("  Nominations:  http://localhost:5000/nps/nominations/view")
+    print("  Nominate:     http://localhost:5000/nps/nominate/view")
     print("  Cycles:       http://localhost:5000/nps/cycles/view")
     print()
     print("  Orgs: WHS CPT IN (with data), RISC (empty)")
