@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Nominate Stakeholders - NPS Survey{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <h4 class="mb-1">Nominate Stakeholders</h4>
+    <p class="text-muted mb-3">
+      Select your leader (or your own name if you are the leader), then add the
+      stakeholders you'd like to receive the NPS survey. One stakeholder can only
+      be nominated once per leader — first come, first served.
+    </p>
+
+    <div id="alert-area"></div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Org</label>
+            <select id="org-select" class="form-select"></select>
+            <div id="cycle-info" class="form-text"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Leader <span class="text-danger">*</span></label>
+            <select id="leader-select" class="form-select">
+              <option value="">-- select leader --</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Your alias (nominator) <span class="text-danger">*</span></label>
+            <input id="nominator-alias" class="form-control" placeholder="e.g. kumruxl" autocomplete="off">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Stakeholder alias <span class="text-danger">*</span></label>
+            <input id="stakeholder-alias" class="form-control" placeholder="e.g. jdoe" autocomplete="off">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Stakeholder name <span class="text-danger">*</span></label>
+            <input id="stakeholder-name" class="form-control" placeholder="Full name" autocomplete="off">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Designation <span class="text-muted">(optional)</span></label>
+            <input id="stakeholder-designation" class="form-control" placeholder="e.g. Sr. Program Manager" autocomplete="off">
+          </div>
+        </div>
+        <button id="submit-btn" class="btn btn-success mt-3">Nominate</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header py-2">
+        <strong>Current nominations under <span id="table-leader-name">selected leader</span></strong>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead>
+            <tr>
+              <th class="ps-3">Name</th>
+              <th>Alias</th>
+              <th>Designation</th>
+              <th>Nominated by</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="nominations-body">
+            <tr><td colspan="5" class="text-muted text-center py-3">Select a leader to view nominations</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Duplicate nomination modal -->
+<div class="modal fade" id="dup-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-warning-subtle">
+        <h5 class="modal-title">Already nominated</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="dup-modal-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const orgSelect = document.getElementById('org-select');
+const leaderSelect = document.getElementById('leader-select');
+const cycleInfo = document.getElementById('cycle-info');
+let orgs = [];
+
+function showAlert(kind, msg) {
+  document.getElementById('alert-area').innerHTML =
+    `<div class="alert alert-${kind} alert-dismissible fade show">${msg}
+     <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>`;
+}
+
+function aliasOf(email) { return (email || '').split('@')[0]; }
+
+async function loadContext() {
+  const res = await fetch('/nps/nominate/context');
+  const data = await res.json();
+  orgs = data.orgs || [];
+  orgSelect.innerHTML = orgs.map(o => `<option value="${o.org_id}">${o.org_name}</option>`).join('');
+  leaderSelect.innerHTML = '<option value="">-- select leader --</option>' +
+    (data.leaders || []).map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+  updateCycleInfo();
+}
+
+function activeOrg() { return orgs.find(o => o.org_id === orgSelect.value); }
+
+function updateCycleInfo() {
+  const org = activeOrg();
+  const cycle = org && org.active_cycle;
+  if (cycle) {
+    cycleInfo.textContent = `Active cycle: ${cycle.cycle_name} (ends ${cycle.end_date})`;
+    cycleInfo.classList.remove('text-danger');
+    document.getElementById('submit-btn').disabled = false;
+  } else {
+    cycleInfo.textContent = 'No active survey cycle for this org — nominations are closed.';
+    cycleInfo.classList.add('text-danger');
+    document.getElementById('submit-btn').disabled = true;
+  }
+}
+
+async function refreshTable() {
+  const leader = leaderSelect.value;
+  const body = document.getElementById('nominations-body');
+  document.getElementById('table-leader-name').textContent = leader || 'selected leader';
+  if (!leader || !orgSelect.value) {
+    body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Select a leader to view nominations</td></tr>';
+    return;
+  }
+  const res = await fetch(`/nps/nominate/list?org_id=${encodeURIComponent(orgSelect.value)}&leader=${encodeURIComponent(leader)}`);
+  if (!res.ok) {
+    body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Could not load nominations</td></tr>';
+    return;
+  }
+  const rows = await res.json();
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No nominations yet</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => `
+    <tr>
+      <td class="ps-3">${r.name}</td>
+      <td>${aliasOf(r.email)}</td>
+      <td>${r.designation || '-'}</td>
+      <td>${r.nominated_by || '-'}</td>
+      <td class="text-end pe-3">
+        <button class="btn btn-sm btn-outline-danger" onclick="removeNomination('${aliasOf(r.email)}')">Remove</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function submitNomination() {
+  const payload = {
+    org_id: orgSelect.value,
+    leader: leaderSelect.value,
+    nominated_by: document.getElementById('nominator-alias').value.trim(),
+    stakeholder_alias: document.getElementById('stakeholder-alias').value.trim(),
+    name: document.getElementById('stakeholder-name').value.trim(),
+    designation: document.getElementById('stakeholder-designation').value.trim(),
+  };
+  if (!payload.leader) { showAlert('warning', 'Please select a leader.'); return; }
+  if (!payload.nominated_by || !payload.stakeholder_alias || !payload.name) {
+    showAlert('warning', 'Your alias, stakeholder alias, and stakeholder name are required.');
+    return;
+  }
+  const res = await fetch('/nps/nominate/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (res.status === 201) {
+    showAlert('success', `Nominated <strong>${payload.name}</strong> under ${payload.leader}.`);
+    ['stakeholder-alias', 'stakeholder-name', 'stakeholder-designation'].forEach(id => document.getElementById(id).value = '');
+    refreshTable();
+  } else if (res.status === 409 && data.duplicate) {
+    const e = data.existing || {};
+    const when = e.created_at ? ` on ${e.created_at.slice(0, 10)}` : '';
+    document.getElementById('dup-modal-body').innerHTML =
+      `<strong>${e.name || payload.stakeholder_alias}</strong> has already been nominated under ` +
+      `<strong>${e.leader}</strong> by <strong>${e.nominated_by || 'someone'}</strong>${when}.<br><br>` +
+      `Nominations are first come, first served per leader. The same stakeholder can still ` +
+      `be nominated under a different leader.`;
+    new bootstrap.Modal(document.getElementById('dup-modal')).show();
+  } else {
+    showAlert('danger', data.error || 'Could not submit nomination.');
+  }
+}
+
+async function removeNomination(stakeholderAlias) {
+  const requestedBy = document.getElementById('nominator-alias').value.trim();
+  if (!requestedBy) {
+    showAlert('warning', 'Enter your alias (nominator field) first — removal is limited to the nominator, the leader, or an admin.');
+    return;
+  }
+  if (!confirm(`Remove ${stakeholderAlias} from ${leaderSelect.value}'s nominations?`)) return;
+  const res = await fetch('/nps/nominate/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      org_id: orgSelect.value,
+      leader: leaderSelect.value,
+      stakeholder_alias: stakeholderAlias,
+      requested_by: requestedBy,
+    }),
+  });
+  const data = await res.json();
+  if (res.ok) { showAlert('success', 'Nomination removed.'); refreshTable(); }
+  else { showAlert('danger', data.error || 'Could not remove nomination.'); }
+}
+
+orgSelect.addEventListener('change', () => { updateCycleInfo(); refreshTable(); });
+leaderSelect.addEventListener('change', refreshTable);
+document.getElementById('submit-btn').addEventListener('click', submitNomination);
+loadContext();
+</script>
+{% endblock %}

@@ -8,12 +8,13 @@ All routes delegate to the service layer and return JSON responses.
 import logging
 import os
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, render_template, request, session
 
 from app.services import (
     nps_cycle_service,
     nps_dashboard_service,
     nps_distribution_service,
+    nps_leader_service,
     nps_nomination_service,
     nps_org_config_service,
     nps_response_service,
@@ -273,6 +274,188 @@ def remove_nomination():
             return jsonify({"error": "org_id, cycle_id, and email are required"}), 400
         nps_nomination_service.remove_stakeholder(org_id, cycle_id, email)
         return jsonify({"status": "removed", "email": email})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error removing nomination")
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Leader roster + self-serve nomination form routes
+# ---------------------------------------------------------------------------
+
+
+@nps_bp.route("/leaders", methods=["GET"])
+@login_required
+def list_leaders():
+    """List the leader roster used by the nomination form."""
+    try:
+        return jsonify(nps_leader_service.list_leaders())
+    except Exception as exc:
+        logger.exception("Error listing leaders")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/leaders/add", methods=["POST"])
+@role_required("admin", "editor")
+def add_leader():
+    """Add a leader to the roster."""
+    try:
+        data = request.json or {}
+        leader = nps_leader_service.add_leader(
+            alias=data.get("alias", ""), name=data.get("name", "")
+        )
+        return jsonify(leader), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@nps_bp.route("/leaders/remove", methods=["POST"])
+@role_required("admin", "editor")
+def remove_leader():
+    """Deactivate a leader on the roster."""
+    data = request.json or {}
+    alias = data.get("alias", "")
+    if not alias:
+        return jsonify({"error": "alias is required"}), 400
+    nps_leader_service.remove_leader(alias)
+    return jsonify({"status": "removed", "alias": alias})
+
+
+@nps_bp.route("/nominate/view", methods=["GET"])
+@login_required
+def nominate_view():
+    """Render the self-serve leader nomination form."""
+    return render_template("nps_leader_nominate.html")
+
+
+@nps_bp.route("/nominate/context", methods=["GET"])
+@login_required
+def nominate_context():
+    """Data the nomination form needs: orgs with active cycles + leaders."""
+    try:
+        orgs = []
+        for org in nps_org_config_service.list_active_orgs():
+            cycle = nps_cycle_service.get_active_cycle(org.org_id)
+            orgs.append({
+                "org_id": org.org_id,
+                "org_name": org.org_name,
+                "active_cycle": (
+                    {
+                        "cycle_id": cycle.cycle_id,
+                        "cycle_name": cycle.cycle_name or cycle.cycle_id,
+                        "end_date": cycle.end_date,
+                    }
+                    if cycle
+                    else None
+                ),
+            })
+        return jsonify({"orgs": orgs, "leaders": nps_leader_service.list_leaders()})
+    except Exception as exc:
+        logger.exception("Error building nomination form context")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/nominate/list", methods=["GET"])
+@login_required
+def nominate_list():
+    """List active-cycle nominations under one leader (for the form's table)."""
+    try:
+        org_id = request.args.get("org_id", "")
+        leader = request.args.get("leader", "")
+        if not org_id or not leader:
+            return jsonify({"error": "org_id and leader query params are required"}), 400
+        cycle = nps_cycle_service.get_active_cycle(org_id)
+        if not cycle:
+            return jsonify({"error": f"No active cycle for org '{org_id}'"}), 404
+        from app.services.nomination_keys import base_email
+
+        rows = nps_nomination_service.list_nominations_for_leader(
+            org_id, cycle.cycle_id, leader
+        )
+        return jsonify([
+            {
+                "email": base_email(n.email),
+                "name": n.name,
+                "designation": n.designation,
+                "nominated_by": n.nominated_by,
+                "created_at": n.created_at,
+            }
+            for n in rows
+        ])
+    except Exception as exc:
+        logger.exception("Error listing leader nominations")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/nominate/submit", methods=["POST"])
+@login_required
+def nominate_submit():
+    """Submit a stakeholder nomination from the self-serve form.
+
+    Returns 409 with the existing row's details when the stakeholder is
+    already nominated under the selected leader (first come, first served).
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        cycle = nps_cycle_service.get_active_cycle(org_id) if org_id else None
+        if not cycle:
+            return jsonify({"error": "No active survey cycle for this org"}), 400
+
+        nomination = nps_nomination_service.nominate_stakeholder(
+            org_id=org_id,
+            cycle_id=cycle.cycle_id,
+            stakeholder_alias=data.get("stakeholder_alias", ""),
+            name=data.get("name", ""),
+            leader=data.get("leader", ""),
+            nominated_by=data.get("nominated_by", ""),
+            designation=data.get("designation", ""),
+        )
+        return jsonify(vars(nomination)), 201
+    except nps_nomination_service.DuplicateNominationError as exc:
+        existing = exc.existing
+        return jsonify({
+            "error": str(exc),
+            "duplicate": True,
+            "existing": {
+                "name": existing.name,
+                "leader": existing.leader,
+                "nominated_by": existing.nominated_by,
+                "created_at": existing.created_at,
+            },
+        }), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error submitting nomination")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/nominate/remove", methods=["POST"])
+@login_required
+def nominate_remove():
+    """Remove a form nomination (admin/editor, the nominator, or the leader)."""
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        cycle = nps_cycle_service.get_active_cycle(org_id) if org_id else None
+        if not cycle:
+            return jsonify({"error": "No active survey cycle for this org"}), 400
+
+        role = session.get("user", {}).get("role", "")
+        nps_nomination_service.remove_leader_nomination(
+            org_id=org_id,
+            cycle_id=cycle.cycle_id,
+            stakeholder_alias=data.get("stakeholder_alias", ""),
+            leader=data.get("leader", ""),
+            requested_by=data.get("requested_by", ""),
+            is_privileged=role in ("admin", "editor"),
+        )
+        return jsonify({"status": "removed"})
+    except PermissionError as exc:
+        return jsonify({"error": str(exc)}), 403
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:

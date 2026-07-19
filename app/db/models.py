@@ -59,6 +59,8 @@ class Nomination:
     email: str
     name: str
     leader: str = ""  # leader this stakeholder's response is tagged against
+    designation: str = ""  # stakeholder's designation/title (optional, self-reported)
+    nominated_by: str = ""  # alias of the person who submitted the nomination
     slack_user_id: str = ""
     responded: bool = False
     responded_at: str = ""
