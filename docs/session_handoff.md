@@ -2,6 +2,46 @@
 
 Paste-ready context to resume in a new chat.
 
+## UPDATE 2026-07-19 (supersedes items below)
+
+DONE this session:
+- **Pipeline blocker RESOLVED** (was pending action #1). Root cause was
+  package NAMING, not missing packages: live carries `Python-Flask = 3.x`
+  (capital F), `Requests = 2.x.x` (base pkg), `Python-moto = 5.x`.
+- Version set **NPSSurveyAutomation/release** created via
+  `brazil versionset create --from live --platforms AL2_x86_64` (owner
+  bindle WHS_AIFA, ID amzn1.bindle.resource.mmjuqvkd5bryeamw5iqq).
+- `brazil-build release` GREEN: **291 tests x CPython 3.10 + 3.12**.
+  Fixes: moto 5, Flask 3 (Werkzeug 3 pairing), bcrypt 5.x (GK vendor
+  guidance), removed setup.py doc_command, hermetic scheduler test
+  (monkeypatch.setenv; patching os.environ.get broke tzlocal on Linux).
+  Pytest stays 6.x (pytest 8 blocked by Pytest-html/py.xml incompat).
+- Server-side VS populated via build.amazon.com -> **Version Set Merge**
+  (18 pkgs -> 235 majors). NOTE: `brazil ws merge` is LOCAL-ONLY; CR
+  dry-run builds fail until the server-side merge is done.
+- **CR-290409853** raised (Config, setup.py, setup.cfg), all analyzers
+  PASS (GK needed the VS merge + fresh revision via `cr -r`). Published;
+  awaiting Vinay Jain approval; auto-merge suggested.
+- **SLAB item done**: secret `nps-survey/slab-api-key` created in
+  Secrets Manager (ap-south-1); `AllowReadSlabApiKey` policy created +
+  attached to `nps-survey-ec2-role`. Key rotation still pending.
+- GitFarm push unblocked (was pending #3): all repos synced through
+  1627d13; CR commit 75c73aa merges via CRUX.
+- Docs updated: `docs/pipeline_setup_plan.md` (Phase 2 complete).
+- Message to Sri drafted (CR + ASR re-profile) — send after CR merges.
+
+NEXT UP:
+1. CR-290409853: get Vinay approval -> merge -> sync laptop/dev-desktop.
+2. Create pipeline at pipelines.amazon.com targeting the
+   NPSSurveyAutomation/release VS (check dropdown next to "Create CDK
+   pipeline" for classic option). Send Sri the message + links.
+3. Phase 3: Apollo deploy stages (Beta -> Prod, manual approval).
+4. SLAB Option A code (slab_helper.py + distribution-service swap) —
+   runs in prod only after Apollo (coral-config needs Brazil runtime).
+5. Then: drop Slack users:read scope; DI/reclassification follow-through.
+6. Unchanged: Kale privacy reviewer chase, reviewer tasks nudge, key
+   rotation, parked items (orphan ASR app, CTI, CAZ ticket).
+
 ## Project
 Internal NPS Survey tool (Flask + Python 3.11) for WHS CPT IN/NA + FEC
 leadership. AWS account **399016860083** (ap-south-1), EC2
