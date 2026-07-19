@@ -12,9 +12,30 @@ via the official SDK on the way.
 
 ## Prereqs (one-time, on Cloud Desktop)
 
-- `mwinit`, Builder Toolbox (brazil, cr, pipelines CLI).
-- A Brazil **version set** for the app (e.g. `NPSSurveyAutomation/mainline`).
+- `mwinit -o` (WebAuthn isn't supported on Cloud Desktop SSH — use OTP).
+- Builder Toolbox (brazil, cr, pipelines CLI).
+- A Brazil **version set** for the app (see the blocker below).
 - Decide the deployment target (see Phase 3 options).
+
+## STATUS / BLOCKER (2026-07): version set for Python deps
+
+Progress: workspace created (zsh Cloud Desktop), package pulled, `Config`
+converted NoOpBuild -> `build-system = brazilpython` (BrazilPython 3.0).
+BrazilPython launches, Python 3.10, and ALL deps resolve EXCEPT Flask and
+requests.
+
+Blocker: **no usable version set carries the Python web stack.**
+- `live` does not contain `Python-flask` / `Python-requests`.
+- `Python-flask` was found only in `HuPyFlask/dev`, which is **deprecated**
+  (and not ours) — dead end.
+- `live` has no tracking version set, so `brazil ws merge` has no source.
+
+Resolution (do via BuilderHub, not blind CLI): create a **new, owned
+version set** for NPSSurveyAutomation based on a current supported base
+that carries `Python-flask`/`Python-requests` (BuilderHub "Create Version
+Set", or pair with a Brazil-experienced colleague). Once that VS exists:
+`brazil ws use --versionSet <ours>` -> `brazil-build release` -> resolve
+any stragglers -> 259 tests run as the gate. Then Phase 3 (Pipelines CDK).
 
 ## Phase 2 — Real build with a test gate (replaces NoOpBuild)
 
