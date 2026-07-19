@@ -17,25 +17,39 @@ via the official SDK on the way.
 - A Brazil **version set** for the app (see the blocker below).
 - Decide the deployment target (see Phase 3 options).
 
-## STATUS / BLOCKER (2026-07): version set for Python deps
+## STATUS (2026-07-19): Phase 2 COMPLETE — blocker resolved
 
-Progress: workspace created (zsh Cloud Desktop), package pulled, `Config`
-converted NoOpBuild -> `build-system = brazilpython` (BrazilPython 3.0).
-BrazilPython launches, Python 3.10, and ALL deps resolve EXCEPT Flask and
-requests.
+The "live lacks Flask/requests" conclusion was wrong: **Brazil package
+names are case/name-sensitive**. The web stack IS in live under:
+- `Python-Flask = 3.x` (capital F — `Python-flask` doesn't exist)
+- `Requests = 2.x.x` (base package; `Python-requests-*` are add-ons like
+  `-kerberos`/`-aws4auth`)
+- `Python-moto = 5.x` (moto 5 `mock_aws` API works as-is)
 
-Blocker: **no usable version set carries the Python web stack.**
-- `live` does not contain `Python-flask` / `Python-requests`.
-- `Python-flask` was found only in `HuPyFlask/dev`, which is **deprecated**
-  (and not ours) — dead end.
-- `live` has no tracking version set, so `brazil ws merge` has no source.
+What was done (all self-serve, no colleague needed):
+1. Version set created via CLI (owner bindle WHS_AIFA):
+   `brazil versionset create --versionSet NPSSurveyAutomation/release
+   --from live --platforms AL2_x86_64 --bindleId <WHS_AIFA-id>
+   --mailingList kumruxl@amazon.com`
+2. `brazil ws use --versionSet NPSSurveyAutomation/release`, Config deps
+   fixed to the names above, `brazil ws merge` (NOTE: merges are
+   **local-only**; see step 4).
+3. `brazil-build release` green: **291 tests x CPython 3.10 + 3.12**.
+   Fixes needed: moto->5.x, Flask->3.x (Werkzeug 3 pairing), removed
+   `doc_command` from setup.py, made test_reads_interval_from_env
+   hermetic (monkeypatch.setenv instead of patching os.environ.get,
+   which broke tzlocal on Linux).
+4. Server-side VS populated via **build.amazon.com -> Version Set Merge**
+   (source: live TIP, the 18 Config deps -> 235 major versions). Required
+   because `brazil ws merge` only updates the local workspace copy — the
+   CR Dry Run Build fails until this is done.
+5. CR raised: https://code.amazon.com/reviews/CR-290409853
+   (`cr` via `toolbox install cr`). GK notes: bcrypt bumped to 5.x on
+   vendor guidance; Pytest stays 6.x (pytest 8 blocked by
+   Pytest-html/py.xml incompat in BrazilPythonTestSupport chain).
 
-Resolution (do via BuilderHub, not blind CLI): create a **new, owned
-version set** for NPSSurveyAutomation based on a current supported base
-that carries `Python-flask`/`Python-requests` (BuilderHub "Create Version
-Set", or pair with a Brazil-experienced colleague). Once that VS exists:
-`brazil ws use --versionSet <ours>` -> `brazil-build release` -> resolve
-any stragglers -> 259 tests run as the gate. Then Phase 3 (Pipelines CDK).
+Remaining: merge CR -> create pipeline (pipelines.amazon.com) targeting
+NPSSurveyAutomation/release -> Phase 3 (Apollo deploy stages).
 
 ## Phase 2 — Real build with a test gate (replaces NoOpBuild)
 
