@@ -303,8 +303,8 @@ class TestInitScheduler:
         result = init_scheduler(app)
         assert result is None
 
-    @patch("app.services.nps_scheduler.os.environ.get", return_value="30")
-    def test_reads_interval_from_env(self, mock_env_get):
+    def test_reads_interval_from_env(self, monkeypatch):
+        monkeypatch.setenv("NPS_SCHEDULER_INTERVAL_MINUTES", "30")
         app = MagicMock()
         app.config = {}
 
