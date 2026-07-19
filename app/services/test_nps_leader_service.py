@@ -1,5 +1,7 @@
 """Tests for the leader roster service (nps_leader_service)."""
 
+from unittest.mock import patch
+
 import pytest
 from moto import mock_aws
 
@@ -74,3 +76,55 @@ class TestNoOrgPollution:
         nps_leader_service.add_leader("raabhas", "Abhas Rao")
         assert nps_org_config_service.list_all_orgs() == []
         assert nps_org_config_service.list_active_orgs() == []
+
+
+class TestSendNominationInvite:
+    _URL = "http://localhost:5000/"
+
+    def _roster(self):
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
+        nps_leader_service.add_leader("raabhas", "Abhas Rao")
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_invite_sent_to_all_leaders_bcc(self, mock_send, ddb_table):
+        from app.db.models import EmailResult
+
+        mock_send.return_value = EmailResult(ok=True)
+        self._roster()
+
+        result = nps_leader_service.send_nomination_invite(
+            self._URL, "2026-08-01", note="Please prioritize."
+        )
+
+        assert result["sent_count"] == 2
+        assert result["deadline"] == "2026-08-01"
+        subject, body, recipients, _from = mock_send.call_args[0]
+        assert "2026-08-01" in subject
+        assert recipients == ["nsbhatia@amazon.com", "raabhas@amazon.com"]
+        assert "/nps/nominate/view?token=" in body
+        assert "Deadline: 2026-08-01" in body
+        assert "Please prioritize." in body
+
+    def test_requires_deadline(self, ddb_table):
+        self._roster()
+        with pytest.raises(ValueError, match="deadline"):
+            nps_leader_service.send_nomination_invite(self._URL, "")
+
+    def test_empty_roster_rejected(self, ddb_table):
+        with pytest.raises(ValueError, match="roster is empty"):
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")
+
+    def test_demo_safe_blocks_invite(self, ddb_table, monkeypatch):
+        self._roster()
+        monkeypatch.setenv("NPS_DEMO_SAFE", "1")
+        with pytest.raises(ValueError, match="Demo-safe"):
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_ses_failure_raises(self, mock_send, ddb_table):
+        from app.db.models import EmailResult
+
+        mock_send.return_value = EmailResult(ok=False, error="SES down")
+        self._roster()
+        with pytest.raises(RuntimeError, match="SES down"):
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")

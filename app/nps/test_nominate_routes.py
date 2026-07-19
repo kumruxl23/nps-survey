@@ -244,3 +244,30 @@ class TestShareLink:
     def test_rotate_requires_admin(self, client):
         resp = client.post("/nps/nominate/share-link/rotate")
         assert resp.status_code == 403
+
+
+class TestNominateInviteRoute:
+    def test_viewer_cannot_invite(self, client):
+        resp = client.post("/nps/nominate/invite", json={"deadline": "2026-08-01"})
+        assert resp.status_code == 403
+
+    def test_admin_invite_sends(self, client):
+        from unittest.mock import patch
+        from app.db.models import EmailResult
+
+        with client.session_transaction() as sess:
+            sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
+        with patch("app.services.email_client.send_bcc_email") as mock_send:
+            mock_send.return_value = EmailResult(ok=True)
+            resp = client.post("/nps/nominate/invite", json={"deadline": "2026-08-01"})
+        assert resp.status_code == 200
+        assert resp.get_json()["sent_count"] == 1  # fixture seeds one leader
+        # Link in the email uses the request host
+        body = mock_send.call_args[0][1]
+        assert "http://localhost/nps/nominate/view?token=" in body
+
+    def test_missing_deadline_400(self, client):
+        with client.session_transaction() as sess:
+            sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
+        resp = client.post("/nps/nominate/invite", json={})
+        assert resp.status_code == 400

@@ -6,9 +6,14 @@
   <div class="col-lg-8">
     <div class="d-flex justify-content-between align-items-start">
       <h4 class="mb-1">Nominate Stakeholders</h4>
-      <button id="share-btn" class="btn btn-sm btn-outline-primary d-none">
-        &#128279; Copy share link
-      </button>
+      <div>
+        <button id="share-btn" class="btn btn-sm btn-outline-primary d-none">
+          &#128279; Copy share link
+        </button>
+        <button id="invite-btn" class="btn btn-sm btn-outline-success d-none" data-bs-toggle="modal" data-bs-target="#invite-modal">
+          &#9993; Invite leaders
+        </button>
+      </div>
     </div>
     <p class="text-muted mb-3">
       Select your leader (or your own name if you are the leader), then add the
@@ -77,6 +82,33 @@
   </div>
 </div>
 
+<!-- Invite leaders modal -->
+<div class="modal fade" id="invite-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Invite leaders to nominate</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3">
+          Sends the nomination form link to every leader on the roster
+          (BCC, one email) asking them to nominate their stakeholders
+          before the deadline.
+        </p>
+        <label class="form-label">Nomination deadline <span class="text-danger">*</span></label>
+        <input id="invite-deadline" type="date" class="form-control mb-3">
+        <label class="form-label">Optional note</label>
+        <textarea id="invite-note" class="form-control" rows="2" placeholder="Anything extra you want to add to the email"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-success" id="invite-send-btn">Send invite</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Duplicate nomination modal -->
 <div class="modal fade" id="dup-modal" tabindex="-1">
   <div class="modal-dialog">
@@ -125,6 +157,7 @@ async function loadContext() {
   if (data.share_path) {
     const btn = document.getElementById('share-btn');
     btn.classList.remove('d-none');
+    document.getElementById('invite-btn').classList.remove('d-none');
     btn.addEventListener('click', async () => {
       const url = location.origin + data.share_path;
       try {
@@ -268,9 +301,31 @@ async function removeNomination(stakeholderAlias) {
   else { showAlert('danger', data.error || 'Could not remove nomination.'); }
 }
 
+async function sendInvite() {
+  const deadline = document.getElementById('invite-deadline').value;
+  const note = document.getElementById('invite-note').value.trim();
+  if (!deadline) { alert('Please pick a deadline date.'); return; }
+  const btn = document.getElementById('invite-send-btn');
+  btn.disabled = true;
+  const res = await fetch(withToken('/nps/nominate/invite'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deadline: deadline, note: note }),
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  bootstrap.Modal.getInstance(document.getElementById('invite-modal')).hide();
+  if (res.ok) {
+    showAlert('success', `Invite sent to <strong>${data.sent_count}</strong> leaders (deadline ${data.deadline}).`);
+  } else {
+    showAlert('danger', data.error || 'Could not send the invite.');
+  }
+}
+
 orgSelect.addEventListener('change', () => { updateCycleInfo(); refreshTable(); });
 leaderSelect.addEventListener('change', refreshTable);
 document.getElementById('nominator-alias').addEventListener('input', renderRows);
+document.getElementById('invite-send-btn').addEventListener('click', sendInvite);
 document.getElementById('submit-btn').addEventListener('click', submitNomination);
 loadContext();
 </script>

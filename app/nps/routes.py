@@ -362,6 +362,25 @@ def rotate_share_link():
     return jsonify({"share_path": f"/nps/nominate/view?token={token}"})
 
 
+@nps_bp.route("/nominate/invite", methods=["POST"])
+@role_required("admin", "editor")
+def send_nomination_invite():
+    """Email all roster leaders the form link with a nomination deadline."""
+    try:
+        data = request.json or {}
+        result = nps_leader_service.send_nomination_invite(
+            base_url=request.host_url,
+            deadline=data.get("deadline", ""),
+            note=data.get("note", ""),
+        )
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error sending nomination invite")
+        return jsonify({"error": str(exc)}), 500
+
+
 @nps_bp.route("/nominate/context", methods=["GET"])
 @login_or_share_token
 def nominate_context():

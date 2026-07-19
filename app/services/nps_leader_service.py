@@ -89,3 +89,71 @@ def get_leader(alias: str) -> dict | None:
     if not item or not item.get("is_active", True):
         return None
     return {"alias": alias, "name": item.get("org_name", "")}
+
+
+# ---------------------------------------------------------------------------
+# Invite / reminder email to all leaders
+# ---------------------------------------------------------------------------
+
+
+def _demo_safe() -> bool:
+    """True when NPS_DEMO_SAFE is set — blocks emails to REAL leaders."""
+    return os.environ.get("NPS_DEMO_SAFE", "").lower() in ("1", "true", "yes")
+
+
+def _build_invite_body(link: str, deadline: str, note: str) -> str:
+    note_html = f"<p>{note}</p>" if note else ""
+    return (
+        "<p>Hello,</p>"
+        "<p>Please nominate the stakeholders from your team who should "
+        "receive the NPS survey. Use the form below — select your name as "
+        "the leader (your directs can also nominate on your behalf by "
+        "selecting your name).</p>"
+        f'<p><a href="{link}">Open the nomination form</a></p>'
+        f"<p><strong>Deadline: {deadline}</strong></p>"
+        "<p>Notes: a stakeholder can only be nominated once per leader "
+        "(first come, first served); the same stakeholder may be nominated "
+        "by different leaders.</p>"
+        f"{note_html}"
+        "<p>Thank you!</p>"
+    )
+
+
+def send_nomination_invite(base_url: str, deadline: str, note: str = "") -> dict:
+    """Email every leader on the roster the nomination form share link.
+
+    All recipients are BCC'd. Raises ValueError when the roster is empty,
+    the deadline is missing, or demo-safe mode is on.
+    """
+    from app.services import email_client, nps_share_link_service
+
+    if _demo_safe():
+        raise ValueError(
+            "Demo-safe mode is ON (NPS_DEMO_SAFE) — invite emails to real "
+            "leaders are disabled."
+        )
+    deadline = (deadline or "").strip()
+    if not deadline:
+        raise ValueError("A nomination deadline is required")
+    leaders = list_leaders()
+    if not leaders:
+        raise ValueError("The leader roster is empty — add leaders first")
+
+    token = nps_share_link_service.get_or_create_token()
+    link = f"{base_url.rstrip('/')}/nps/nominate/view?token={token}"
+
+    subject = f"Action needed: nominate your NPS survey stakeholders by {deadline}"
+    body = _build_invite_body(link, deadline, note.strip())
+    recipients = sorted(f"{leader['alias']}@amazon.com" for leader in leaders)
+    from_address = os.environ.get("NPS_FROM_ADDRESS", "")
+
+    result = email_client.send_bcc_email(subject, body, recipients, from_address)
+    if not result.ok:
+        raise RuntimeError(result.error or "Invite email failed to send")
+
+    logger.info("Nomination invite sent to %d leaders (deadline %s)", len(recipients), deadline)
+    return {
+        "sent_count": len(recipients),
+        "leaders": [leader["name"] for leader in leaders],
+        "deadline": deadline,
+    }
