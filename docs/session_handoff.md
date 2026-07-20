@@ -30,16 +30,30 @@ DONE this session:
 - Docs updated: `docs/pipeline_setup_plan.md` (Phase 2 complete).
 - Message to Sri drafted (CR + ASR re-profile) — send after CR merges.
 
+UPDATE 2026-07-20: CR-290409853 MERGED (Riwjit approved; Vinay lacked
+base source-code access — request filed, pending manager approval +
+propagation). Pipeline **NPSSurveyAutomation-release** live (ID 9919991),
+first build green (build.amazon.com/7939468486), package is a VS TARGET,
+autobuild ON for NPSSurveyAutomation only. Sri message sent with links.
+NEW FEATURE built on laptop (commits 4488cd4, deb554e, 0413c5b, local +
+GitHub only): self-serve leader nomination form (/nps/nominate) — leader
+roster, first-come-first-served per leader/cycle, share-token capability
+link, invite-leaders email with deadline. 339 tests. MUST go to GitFarm
+via feature branch + CR (do NOT push straight to mainline).
+
 NEXT UP:
-1. CR-290409853: get Vinay approval -> merge -> sync laptop/dev-desktop.
-2. Create pipeline at pipelines.amazon.com targeting the
-   NPSSurveyAutomation/release VS (check dropdown next to "Create CDK
-   pipeline" for classic option). Send Sri the message + links.
-3. Phase 3: Apollo deploy stages (Beta -> Prod, manual approval).
-4. SLAB Option A code (slab_helper.py + distribution-service swap) —
+1. Nomination-feature CR: laptop `git pull internal mainline` (merge the
+   BrazilPython commit), push GitHub; push feature branch to GitFarm
+   (`git push internal main:leader-nominations`), dev desktop checkout ->
+   brazil-build release -> cr --destination-branch mainline.
+2. Fix CRUX team-review rule (team-level settings) so future CRs notify
+   only chosen reviewers, not the whole team.
+3. Vinay: confirm source-code access landed; re-add as reviewer on next CR.
+4. Phase 3: Apollo deploy stages (pipeline Edit tab -> add environments).
+5. SLAB Option A code (slab_helper.py + distribution-service swap) —
    runs in prod only after Apollo (coral-config needs Brazil runtime).
-5. Then: drop Slack users:read scope; DI/reclassification follow-through.
-6. Unchanged: Kale privacy reviewer chase, reviewer tasks nudge, key
+6. Then: drop Slack users:read scope; DI/reclassification follow-through.
+7. Unchanged: Kale privacy reviewer chase, reviewer tasks nudge, SLAB key
    rotation, parked items (orphan ASR app, CTI, CAZ ticket).
 
 ## Project

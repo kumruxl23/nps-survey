@@ -48,8 +48,26 @@ What was done (all self-serve, no colleague needed):
    vendor guidance; Pytest stays 6.x (pytest 8 blocked by
    Pytest-html/py.xml incompat in BrazilPythonTestSupport chain).
 
-Remaining: merge CR -> create pipeline (pipelines.amazon.com) targeting
-NPSSurveyAutomation/release -> Phase 3 (Apollo deploy stages).
+DONE (2026-07-20): CR-290409853 MERGED (approved by Riwjit; Vinay blocked
+on missing source-code access — request filed via
+code.amazon.com/request-source-permissions). Pipeline CREATED:
+**NPSSurveyAutomation-release** (pipelines.amazon.com, hand-managed,
+version-set-based, bindle WHS_AIFA, pipeline ID 9919991). First build
+green: https://build.amazon.com/7939468486 — package built into the VS
+as a TARGET (mark-as-target anchors the merged deps past their 13-day
+retention). Autobuild enabled for NPSSurveyAutomation/mainline only (do
+NOT "Turn On All" — third-party packages update via merges from live).
+
+Gotchas learned:
+- `cr` reuses the existing revision if the commit is unchanged; to force a
+  fresh workspace snapshot (e.g. after granting a reviewer package read),
+  `git commit --amend --no-edit` then `cr -r <CR>`.
+- CR reviewers need base Amazon source-code access, not just bindle
+  grants on the package.
+- A CRUX rule pins "WHS CPT IN AIFA team 1+" as reviewer (mass-notifies
+  the team on every revision). Edit the rule at team level to quiet it.
+
+Remaining: Phase 3 (Apollo deploy stages on this pipeline's Edit tab).
 
 ## Phase 2 — Real build with a test gate (replaces NoOpBuild)
 
