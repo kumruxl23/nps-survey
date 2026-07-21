@@ -86,8 +86,9 @@ stakeholders across WHS CPT IN, WHS CPT NA, FEC.
 
 1. Confirm scope via CloudTrail
 2. Restore tables from PITR (if enabled — current state: planned, not yet on)
-3. Fallback: re-import workbooks from S3 + re-run backfill_from_asana for
-   missing responses
+3. Fallback: re-import stakeholder workbooks from the admin-held source
+   files (app is stateless on EC2) + re-run backfill_from_asana for
+   missing responses (Asana is the secondary system of record)
 4. RPO 5 min for PITR; RTO < 4 hours for full re-import
 
 #### 2e. Service degradation
@@ -137,7 +138,7 @@ After Sev-1 or Sev-2 incidents:
 | Component down | Effect | Workaround |
 |---|---|---|
 | App (EC2) | Reminders pause; dashboard inaccessible | Asana form keeps collecting; restart EC2 |
-| DynamoDB | Read/write fails | PITR restore or re-import from S3 |
+| DynamoDB | Read/write fails | PITR restore or re-import from admin-held workbooks |
 | SES | Email reminders fail | Slack channel still works (if enabled per org) |
 | Slack API | Slack DMs fail | Email reminders still work |
 | Asana API | Backfill stalls; existing responses unaffected | Manual admin entry via /nps/responses/record |

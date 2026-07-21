@@ -100,7 +100,8 @@ email-only (already not-Red on its own).
   Real integration = OpusSLABPythonSDK (Brazil/Coral, coral-config
   endpoint, SigV4a, request field `userAliases`) -> chosen = Option A
   (SDK via pipeline).
-- ASR re-profiled: 32 answers resubmitted, DI/threat-model v279 linked,
+- ASR re-profiled: 32 answers resubmitted, DI/threat-model v449 linked
+  (embedded diagram v283; supersedes v279),
   TPS profile dropped. `docs/asr_reprofiling_answers.md` (before/after +
   DI deltas + copy-paste threat justifications). `docs/nps_architecture_diagram.drawio`
   updated (SLAB internal boundary, Slack = chat:write only).
@@ -127,10 +128,35 @@ email-only (already not-Red on its own).
    + attach `AllowReadSlabApiKey` (policy in repo). Needs fresh `ada`
    creds. Rotate the key later (shared in plaintext).
 3. **Push to GitFarm** once Midway/VPN fixed.
-4. **Finish DI + reclassification:** make SLAB box a real component (not
-   visual-only), re-run threat analysis, publish, attach
-   `NPSSurveyReminders-279.html` to the Threat Model task, ask Sri to
-   re-assess classification.
+4. **Finish DI + reclassification:** DONE 2026-07-21. Threat model
+   **v449** published (0 unmitigated / 28 mitigated / 1 false-positive,
+   non-blocking findings dismissed; embedded diagram v283). S3 removed
+   from Architecture page (not used by code); data-element map matches
+   code (responses→Asana API; Slack user ID→SLAB+DynamoDB+Slack API).
+   Export `NPSSurveyReminders-449.html` attached to the Threat Model
+   task. **Reclassification OFFICIAL: review now Yellow, Ring-2,
+   Baseline only** — Red reviewer tasks removed. Critical path:
+   Privacy Compliance Review (Kale) → Resolve Required Issues →
+   certifier (sripathb@) sign-off.
+   Kale (2026-07-21): discovered the privacy review was NEVER
+   submitted (validation error on NpsNominations). Fixed: data object
+   recreated with real 8-field schema + DSAR answers (leader field =
+   Redact third-party; slack_user_id = cached copy, non-authoritative).
+   **S3 bucket whs-cpt-nps-survey DELETED** (held redundant copies of
+   the 3 admin workbooks, byte-identical to laptop copies; app never
+   used it — no s3: in code or IAM role). Kale S3 data object removed
+   to match. All 6 DynamoDB data objects fixed (Nominations/OrgConfig/
+   Responses recreated with real schemas + per-field DSAR answers;
+   ReminderLogs corrected to No-personal-data — failures field never
+   populated in code; DeliveryFailures + ReminderLogs tables confirmed
+   0 rows). App description fixed (SLAB lookup, chat:write only, Asana
+   polling not webhooks). **Kale SUBMITTED 2026-07-21, Privacy Status:
+   In Review** with kale-wrkplace-hlth-safety. Side quest: Kale spawned
+   a Tax/Accounting financial review (false-positive trigger from the
+   "Provide Amazon services" use case) — does NOT block ASR privacy
+   approval; answer "no financial data" at leisure.
+   Next: nudge kale-wrkplace-hlth-safety via Smruthi thread P441140532;
+   good-news note to Sri.
 5. **Message Sri:** pipeline in progress (build converted, setting up
    version set) — SDO fast-follow narrative.
 6. **Chase Kale privacy reviewer** (Privacy Compliance task) -> gates
@@ -141,7 +167,7 @@ email-only (already not-Red on its own).
    close CAZ ticket P449029619.
 
 ## Honest notes
-- Reclassification is the reviewer's call after seeing v279 DI. Dropping
+- Reclassification is the reviewer's call after seeing v449 DI. Dropping
   `users:read` removes the Slack trigger, but credential handling +
   Confidential data likely keep it lower-rank Red or Yellow.
 - Do NOT make the app internet-facing while ASR is uncertified Red

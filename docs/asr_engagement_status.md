@@ -14,8 +14,8 @@ changes so the work doesn't get lost across sessions.
 | Bindle | WHS_AIFA |
 | Owner | kumruxl@ |
 | Backup | kuvinu@ (planned) |
-| Classification | Red, Ring-3, Red Rank Score 3.39 |
-| Profiles | Baseline + Red + Third Party Security |
+| Classification | **Yellow, Ring-2** (as of 2026-07-21; was Red, Ring-3, Red Rank Score 3.39) |
+| Profiles | Baseline (Red + Third Party Security profiles dropped with reclassification) |
 | Code package | ssh://git.amazon.com/pkg/NPSSurveyAutomation |
 | Slack workspace | T016NEJQWE9 (Amazon enterprise) |
 | Slack app | NPS Survey Reminders (install request submitted, blocked on ASR) |
@@ -52,28 +52,40 @@ Progress:
       Onboarding **CR-289008613 MERGED** (role on prod allowlist for
       OpusUsersGetSlackIDFromAlias). Awaiting pipeline deploy → prod API key.
       (Initial general query D490637982, superseded.)
-- [ ] Confirm API contract (endpoint, request/response fields, service).
-- [ ] Create `nps-survey/slab-api-key` secret + IAM grant.
-- [ ] Swap the two lookup sites in `nps_distribution_service.py`.
+- [x] Confirm API contract (endpoint, request/response fields, service)
+      — OpusSLABPythonSDK, Option A via pipeline.
+- [x] Create `nps-survey/slab-api-key` secret + IAM grant
+      (`AllowReadSlabApiKey` attached to `nps-survey-ec2-role`).
+- [ ] Swap the two lookup sites in `nps_distribution_service.py`
+      (SLAB Option A code; runs in prod after Apollo deploy).
 - [ ] Remove `users:read` from the Slack app; keep only `chat:write`.
-- [ ] OPUS/ASR confirm reclassification out of Red.
+- [x] Reclassification LANDED 2026-07-21: review now **Yellow, Ring-2**
+      (threat model v449; credentials/3P answers recomputed the profile).
 
 ## Task status
 
 ### Re-profiled for SLAB reclassification (2026-07)
 
 Profiling re-submitted (32 answers) + DI/threat model updated to
-**v279** and linked in ASR. Key answers now: "share non-public data with
-3P → No", "3P component hosted → Not Applicable" → **TPS profile dropped**.
-Still Red/Ring-2 (credentials/encryption-keys = Yes + Confidential data +
-Slack SDK keep it Red); final reclassification is the reviewer's call
-after they review the updated DI. See `docs/asr_reprofiling_answers.md`.
+**v449** (embedded diagram v283) and linked in ASR. Key answers now:
+"share non-public data with 3P → No", "3P component hosted → Not
+Applicable" → **TPS profile dropped**; "credentials/encryption keys
+protecting critical or restricted data → No" (2026-07-21; service creds
+access Confidential data only, app passwords bcrypt-hashed) →
+**reclassification OFFICIAL 2026-07-21: review shows Yellow, Ring-2,
+Baseline profile only** (Review Status: In Progress). The four
+Red-profile reviewer tasks (Automated/Manual Code Review, Review Threat
+Model, Threat Mitigation Testing) were removed from the review along
+with the Red profile — no reviewer assignment needed for them anymore.
+Remaining critical path: Privacy Compliance Review → Resolve Required
+Issues (both Application Owner) → certifier sign-off (sripathb@).
+See `docs/asr_reprofiling_answers.md`.
 
 ### Application Owner tasks — DONE
 
 | Task | Status | Evidence |
 |---|---|---|
-| Threat Model (Baseline) | ✅ Complete | DI project NPSSurveyReminders, updated to v279 (SLAB internal lookup; Slack reduced to chat.postMessage/chat:write), exported HTML attached |
+| Threat Model (Baseline) | ✅ Complete | DI project NPSSurveyReminders, updated to v449 (SLAB internal lookup; Slack reduced to chat.postMessage/chat:write; S3 removed — not used; data-element map verified against code; 0 unmitigated / 28 mitigated / 1 FP), exported HTML attached |
 | Permissions (Red) | ✅ Complete | IAM role `nps-survey-ec2-role` scoped to least privilege; AmazonDynamoDBFullAccess + AmazonSESFullAccess replaced with AllowNpsDynamoDB + AllowNpsSESSend (see `infra/iam-policies/`) |
 | Incident Response Plan (Red) | ✅ Complete | `docs/incident_response_plan.md` |
 | Third Party Security Review | ✅ Complete | TPTA0027224 (Asana) + TPTA0050664 (Slack), both Tier 4, "Amazon 3P Security Bar Met" |
@@ -82,17 +94,16 @@ after they review the updated DI. See `docs/asr_reprofiling_answers.md`.
 
 | Task | Status | Blocked on |
 |---|---|---|
-| Privacy Compliance Review (Baseline) | Incomplete | Kale review awaiting privacy reviewer (kale-wrkplace-hlth-safety group); Veritas ID 33d9f777-...c021ad |
+| Privacy Compliance Review (Baseline) | Incomplete — Kale **submitted 2026-07-21, In Review** | Discovery: Kale had NEVER been submitted (validation errors). Fixed all 6 DynamoDB data objects + app description, then submitted to kale-wrkplace-hlth-safety; ASR task auto-completes when Kale is Approved. Side branch: Kale financial review triggered (false positive, does not block ASR). Veritas ID 33d9f777-...c021ad |
 | Resolve Required Issues (Baseline) | Incomplete | Privacy Compliance must complete first |
 
-### Reviewer-assigned tasks — BLOCKED on reviewer assignment
+### Reviewer-assigned tasks — REMOVED with Red profile (2026-07-21)
 
-| Task | Status | Notes |
-|---|---|---|
-| Automated Code Review (Red) | Incomplete | Reviewer-side; we uploaded local Bandit CSV (487 Low, 0 Medium, 0 High, all auto-triaged FP) to give the reviewer a head start |
-| Review Threat Model (Red) | Incomplete | Reviewer-side |
-| Threat Mitigation Testing (Red) | Incomplete | Reviewer-side |
-| Manual Code Review (Red) | Incomplete | Reviewer-side; package linked: NPSSurveyAutomation |
+The Yellow reclassification dropped the Red profile and its four
+reviewer-side tasks (Automated Code Review, Review Threat Model, Threat
+Mitigation Testing, Manual Code Review). They no longer appear in the
+review. Bandit CSV (487 Low / 0 Med / 0 High, all triaged FP) remains
+attached as evidence.
 
 ## Reviewer Status
 
@@ -105,18 +116,21 @@ after they review the updated DI. See `docs/asr_reprofiling_answers.md`.
   Smruthi on P441140532). Kale is mapped to the ASR; awaiting reviewer
   pickup.
 
-## Why this is a Red review (not Yellow)
+## Why this WAS a Red review (historical — resolved 2026-07-21)
 
-The Red classification is NOT from data tier — the app only handles
-Confidential data (employee name/email/NPS scores). The Red comes from
-the **third-party Slack integration's access profile**:
+The original Red classification was NOT from data tier — the app only
+handles Confidential data (employee name/email/NPS scores). The Red came
+from the **third-party Slack integration's access profile**:
 - high-risk `users:read` scope (parent of `users:read.email` per Slack)
-- `chat:write` (write access into the Slack workspace)
 - sharing non-public Amazon data (employee email -> Slack user ID) with a
   third-party SaaS
 
-This is a legitimate Red trigger regardless of data classification. Do NOT
-attempt to reclassify down to Yellow — the Red is correct.
+The SLAB pivot removed both triggers: Slack ID resolution moved to the
+internal OPUS SLAB API, Slack reduced to `chat:write` /
+`chat.postMessage` only, and the re-profiled answers (no 3P data
+sharing, no credentials protecting critical/restricted data)
+recomputed the review to **Yellow**. The Red was correct at the time;
+the Yellow is correct now because the architecture changed.
 
 ## Related tickets
 

@@ -34,6 +34,7 @@ SETUP_CHECKLIST.md
 # Confidential / "do not share" — must never reach the GitHub mirror):
 #   ASR threat-model HTML exports, SLAB API redoc, SLAB SDK readme.
 NPSSurveyReminders-*.html
+threatList*.csv
 /index.html
 /README.md
 Config-val

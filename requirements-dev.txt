@@ -1,0 +1,6 @@
+# Dev/local-only dependencies (not needed in production).
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+#
+# moto mocks AWS (DynamoDB/SES) so run_local.py works with no real AWS
+# account, credentials, or network access.
+moto>=5.0.0

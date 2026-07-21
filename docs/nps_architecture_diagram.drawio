@@ -28,7 +28,7 @@
         </mxCell>
 
         <!-- DynamoDB -->
-        <mxCell id="ddb" value="DynamoDB&#10;Nps* tables&#10;(7 tables, encrypted)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11" vertex="1" parent="1">
+        <mxCell id="ddb" value="DynamoDB&#10;Nps* tables&#10;(6 tables, encrypted)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="420" y="290" width="160" height="80" as="geometry" />
         </mxCell>
 
@@ -45,11 +45,6 @@
         <!-- CloudWatch Logs -->
         <mxCell id="cw" value="CloudWatch Logs&#10;/aws/ec2/nps-survey-app" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8BBD0;strokeColor=#880E4F;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="610" y="410" width="160" height="80" as="geometry" />
-        </mxCell>
-
-        <!-- S3 -->
-        <mxCell id="s3" value="S3&#10;whs-cpt-nps-survey&#10;(stakeholder workbooks)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#D7CCC8;strokeColor=#3E2723;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="515" y="525" width="160" height="80" as="geometry" />
         </mxCell>
 
         <!-- IAM Role -->
@@ -99,10 +94,6 @@
         </mxCell>
 
         <mxCell id="e5" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="cw">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <mxCell id="e6" value="HTTPS / IAM" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="s3">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
