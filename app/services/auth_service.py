@@ -90,6 +90,26 @@ def create_user(username: str, password: str, role: str, display_name: str = "")
     return {"username": username, "role": role, "display_name": display_name or username}
 
 
+def get_user(username: str) -> dict | None:
+    """Fetch an active user record by username WITHOUT a password check.
+
+    Used by the Midway (ALB OIDC) auto-login path, where the network edge
+    has already authenticated the person and we only need their app role.
+    Returns None for unknown or deactivated users.
+    """
+    if not username:
+        return None
+    table = _get_table()
+    item = table.get_item(Key={"org_id": f"__user__{username}"}).get("Item")
+    if not item or not item.get("is_active", True):
+        return None
+    return {
+        "username": username,
+        "role": item.get("asana_project_gid", "viewer"),
+        "display_name": item.get("org_name", username),
+    }
+
+
 def authenticate(username: str, password: str) -> dict | None:
     """Verify credentials. Returns user dict or None if invalid."""
     table = _get_table()

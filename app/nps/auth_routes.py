@@ -1,7 +1,22 @@
-"""Authentication routes and role-based access decorators."""
+"""Authentication routes and role-based access decorators.
+
+Two auth modes:
+
+1. Password login (default) — the classic username/password form backed
+   by bcrypt hashes in DynamoDB. Used for local dev (run_local.py).
+2. Midway auto-login (NPS_MIDWAY_AUTH=1) — in production the app sits
+   behind an ALB whose HTTPS listener authenticates every request via
+   Amazon Federate (Midway) and injects the caller's alias in the
+   ``X-Amzn-Oidc-Identity`` header. The instance security group admits
+   traffic ONLY from the ALB, so the header cannot be spoofed. The app
+   maps alias -> role from its existing user store; the password form is
+   disabled entirely. Unknown aliases get an access-request page.
+"""
 
 import functools
 import logging
+import os
+import secrets as _secrets
 
 from flask import (
     Blueprint,
@@ -20,6 +35,33 @@ logger = logging.getLogger(__name__)
 auth_bp = Blueprint("auth", __name__, url_prefix="/nps/auth", template_folder="../templates")
 
 
+def _midway_enabled() -> bool:
+    return os.environ.get("NPS_MIDWAY_AUTH") == "1"
+
+
+def _midway_alias() -> str:
+    """The Midway alias asserted by the ALB, or empty string."""
+    return request.headers.get("X-Amzn-Oidc-Identity", "").strip().lower()
+
+
+def _try_midway_auth() -> dict | None:
+    """Populate the session from the ALB's verified Midway identity.
+
+    No-op unless NPS_MIDWAY_AUTH=1. Returns the user dict on success.
+    """
+    if not _midway_enabled():
+        return None
+    alias = _midway_alias()
+    if not alias:
+        return None
+    user = auth_service.get_user(alias)
+    if not user:
+        return None
+    session["user"] = user
+    logger.info("Midway auto-login: %s (%s)", alias, user["role"])
+    return user
+
+
 # ── Decorators ───────────────────────────────────────────────────
 
 
@@ -27,6 +69,8 @@ def login_required(f):
     """Require any authenticated user."""
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        if "user" not in session:
+            _try_midway_auth()
         if "user" not in session:
             if request.is_json or request.headers.get("Accept") == "application/json":
                 return jsonify({"error": "Authentication required"}), 401
@@ -40,6 +84,8 @@ def role_required(*roles):
     def decorator(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
+            if "user" not in session:
+                _try_midway_auth()
             if "user" not in session:
                 if request.is_json:
                     return jsonify({"error": "Authentication required"}), 401
@@ -57,15 +103,24 @@ def role_required(*roles):
 
 @auth_bp.route("/login", methods=["GET"])
 def login_page():
-    """Render the login page."""
+    """Render the login page (password mode) or auto-login (Midway mode)."""
     if "user" in session:
         return redirect("/nps/dashboard")
+    if _midway_enabled():
+        if _try_midway_auth():
+            return redirect("/nps/dashboard")
+        # Authenticated with Midway but not provisioned in the app.
+        return render_template(
+            "nps_login.html", midway_denied=True, alias=_midway_alias()
+        ), 403
     return render_template("nps_login.html")
 
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
-    """Authenticate user."""
+    """Authenticate user (password mode only)."""
+    if _midway_enabled():
+        return jsonify({"error": "Password login is disabled; access is via Midway"}), 403
     if request.is_json:
         data = request.json
     else:
@@ -117,9 +172,15 @@ def add_user():
     """Create a new user."""
     try:
         data = request.json or {}
+        username = data.get("username", "").strip().lower()
+        password = data.get("password", "")
+        if not password and _midway_enabled():
+            # Midway mode: the password is never used (form is disabled);
+            # store an unguessable random one to satisfy the model.
+            password = _secrets.token_urlsafe(32)
         user = auth_service.create_user(
-            username=data.get("username", ""),
-            password=data.get("password", ""),
+            username=username,
+            password=password,
             role=data.get("role", "viewer"),
             display_name=data.get("display_name", ""),
         )
