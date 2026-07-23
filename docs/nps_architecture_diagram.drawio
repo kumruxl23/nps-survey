@@ -22,9 +22,14 @@
           <mxGeometry x="380" y="80" width="540" height="540" as="geometry" />
         </mxCell>
 
-        <!-- nginx + Flask EC2 -->
-        <mxCell id="ec2" value="EC2 i-06ccd83e4b55fa98f&#10;(nginx :443 + gunicorn/Flask :5000)&#10;Amazon Linux 2023" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="560" y="130" width="220" height="80" as="geometry" />
+        <!-- ALB with Midway (Federate OIDC) auth -->
+        <mxCell id="alb" value="ALB nps-alb (internet-facing)&#10;authenticate-oidc: Amazon Federate / Midway&#10;nps.whs-cpt.amazon.dev (ACM cert)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00695C;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="400" y="130" width="140" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- gunicorn/Flask EC2 -->
+        <mxCell id="ec2" value="EC2 i-06ccd83e4b55fa98f&#10;(gunicorn/Flask :5000, SG: ALB-only)&#10;Amazon Linux 2023, SSM-only shell" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="580" y="130" width="200" height="80" as="geometry" />
         </mxCell>
 
         <!-- DynamoDB -->
@@ -77,7 +82,11 @@
         </mxCell>
 
         <!-- Edges -->
-        <mxCell id="e1" value="HTTPS / Session" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=10" edge="1" parent="1" source="user" target="ec2">
+        <mxCell id="e1" value="HTTPS / Midway login&#10;(Federate OIDC at ALB)" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=10" edge="1" parent="1" source="user" target="alb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1b" value="HTTP :5000&#10;(SG: from ALB only)" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=10" edge="1" parent="1" source="alb" target="ec2">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 

@@ -151,9 +151,14 @@ Rationale: clears the "Uncertified Red Application in Production"
 Shepherd finding without user impact (cycle is done). DynamoDB data is
 untouched and persists independently of the EC2.
 
-Re-deployment plan: bring the service back ONLY after the ASR review is
-certified, for the H2 2026 cycle. Do not return to production
-uncertified.
+**UPDATE 2026-07-23: RE-HOSTED.** The Red classification (the basis of
+the Shepherd finding and the do-not-host rule) was removed on
+2026-07-21 — the review is Yellow and self-certifiable once the
+privacy task completes. The app is back up at
+**https://nps.whs-cpt.amazon.dev** behind a Midway-gated ALB (Federate
+OIDC `nps-survey-reminders-prod`); instance SG is ALB-only on :5000,
+public 80/443/22 revoked, shell via SSM only. See
+`docs/midway_alb_setup.md` (DONE).
 
 ## Shepherd findings status (2026-06-17)
 

@@ -56,10 +56,31 @@ NEXT UP:
 7. Unchanged: Kale privacy reviewer chase, reviewer tasks nudge, SLAB key
    rotation, parked items (orphan ASR app, CTI, CAZ ticket).
 
+## UPDATE 2026-07-23 — App LIVE behind Midway
+
+- Sri confirmed: **Yellow = self-certified** — no external certifier
+  needed once Privacy Compliance + Resolve Required Issues complete.
+- App re-hosted (Yellow removed the Red-in-prod Shepherd blocker):
+  **https://nps.whs-cpt.amazon.dev** behind an internet-facing ALB with
+  Federate OIDC (Midway) auth. No `/` route — land on /nps/dashboard.
+  Register a go/ shortlink (go/nps-survey) for the friendly URL.
+- Built per docs/midway_alb_setup.md (now marked DONE): ACM cert,
+  nps-alb + nps-tg (health /nps/auth/login, target healthy), Federate
+  client nps-survey-reminders-prod (secret in Secrets Manager
+  nps-survey/federate-oidc), Route 53 alias, NPS_BEHIND_PROXY=1 +
+  NPS_ALLOWED_HOSTS via systemd drop-in, service enabled + active.
+- **Instance SG locked down**: only :5000 from ALB SG remains; public
+  80/443/22 revoked (SSH was world-open — now truly SSM-only, matching
+  the threat model claim). nginx + nip.io + Let's Encrypt retired from
+  the serving path.
+- NOTE: Federate client secret was pasted in chat during setup —
+  regenerate it in Federate + update listener/secret when convenient.
+
 ## Project
 Internal NPS Survey tool (Flask + Python 3.11) for WHS CPT IN/NA + FEC
 leadership. AWS account **399016860083** (ap-south-1), EC2
-`i-06ccd83e4b55fa98f`. Repo: GitFarm
+`i-06ccd83e4b55fa98f`. **Live at https://nps.whs-cpt.amazon.dev
+(Midway-gated ALB)**. Repo: GitFarm
 `ssh://git.amazon.com/pkg/NPSSurveyAutomation` (authoritative) + GitHub
 mirror `github.com/kumruxl23/nps-survey`. Owner **kumruxl@**, co-owner
 **kuvinu@**. App is currently **OUT of production** (H1 cycle done). ASR:

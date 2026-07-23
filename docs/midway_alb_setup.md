@@ -1,5 +1,17 @@
 # Midway-gated ALB in front of the NPS app
 
+> **STATUS: DONE 2026-07-23.** Live at https://nps.whs-cpt.amazon.dev
+> (Flask has no `/` route — use /nps/dashboard or /nps/auth/login).
+> Built: ACM cert (e5223d0b...), ALB `nps-alb` + `nps-tg` (health check
+> /nps/auth/login), Federate OIDC client `nps-survey-reminders-prod`
+> (secret in Secrets Manager `nps-survey/federate-oidc`; also embedded
+> in the listener config as ALB requires), Route 53 alias in
+> whs-cpt.amazon.dev zone, `NPS_BEHIND_PROXY=1` +
+> `NPS_ALLOWED_HOSTS=nps.whs-cpt.amazon.dev` via systemd drop-in.
+> Instance SG locked to :5000 from ALB SG only — public 80/443/22
+> REVOKED (SSM-only shell, matching the threat model). nginx and the
+> old nip.io/Let's Encrypt path are no longer in the serving chain.
+
 Put an internet-facing ALB with an `authenticate-oidc` (Amazon Federate /
 Midway) listener rule in front of the app. Midway gates the network edge;
 the app needs zero auth code for that gate. The app's own admin/editor/
