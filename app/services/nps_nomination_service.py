@@ -174,38 +174,9 @@ def nominate_stakeholder(
     return nps_nomination_repo.get_nomination(org_id, cycle_id, sort_key)
 
 
-def lookup_person(org_id: str, alias: str) -> dict | None:
-    """Best-effort person lookup from org data for form prefill.
-
-    Sources, in order:
-    1. The org's leader roster — if the alias IS a leader, their own name
-       comes back as the leader (a leader nominating for themselves).
-    2. Nomination history (newest cycle first, including workbook imports):
-       returns the person's recorded name, designation, and the leader
-       their records sit under — which for an org roster built from the
-       sponsor's directs is exactly the top leader within their span.
-
-    Returns {name, designation, leader, is_leader, source} or None when
-    the alias is unknown. NOTE: this is org-data driven, not an org-chart
-    API; people absent from every cycle's records need manual entry.
-    """
+def _lookup_from_history(org_id: str, email: str) -> dict | None:
+    """Newest-first search of nomination records for this email."""
     from app.db import nps_cycle_repo
-
-    email = _alias_to_email(alias)
-    if not org_id or not email:
-        return None
-    plain_alias = email.split("@", 1)[0]
-
-    roster = nps_leader_service.list_leaders(org_id)
-    for leader_entry in roster:
-        if leader_entry["alias"] == plain_alias:
-            return {
-                "name": leader_entry["name"],
-                "designation": "",
-                "leader": leader_entry["name"],
-                "is_leader": True,
-                "source": "roster",
-            }
 
     cycles = sorted(
         nps_cycle_repo.list_cycles(org_id),
@@ -223,6 +194,82 @@ def lookup_person(org_id: str, alias: str) -> dict | None:
                     "source": f"history:{cycle.cycle_id}",
                 }
     return None
+
+
+def _lookup_from_papi(org_id: str, plain_alias: str) -> dict | None:
+    """Directory lookup via PAPI + manager-chain leader resolution.
+
+    Returns None when PAPI is unconfigured, unavailable, or the alias is
+    unknown — callers fall through to history. A found employee whose
+    chain never meets the org roster still returns name/title with an
+    empty leader (the form asks for a manual pick).
+    """
+    from app.services import papi_client
+
+    if not papi_client.is_configured():
+        return None
+    try:
+        employee = papi_client.get_employee(plain_alias)
+        if not employee:
+            return None
+        chain = papi_client.resolve_leader_via_chain(org_id, plain_alias)
+        return {
+            "name": employee["name"],
+            "designation": employee["title"],
+            "leader": chain["leader_name"] if chain else "",
+            "is_leader": bool(chain and chain["hops"] == 0),
+            "source": "papi",
+        }
+    except papi_client.PapiError as exc:
+        # Directory down/misconfigured must never break the form.
+        import logging
+        logging.getLogger(__name__).warning("PAPI lookup failed, falling back: %s", exc)
+        return None
+
+
+def lookup_person(org_id: str, alias: str) -> dict | None:
+    """Best-effort person lookup for form prefill.
+
+    Sources, in order:
+    1. The org's leader roster — if the alias IS a leader, their own name
+       comes back as the leader (a leader nominating for themselves).
+    2. PAPI directory (when onboarded/configured): any Amazon alias —
+       name + business title, and the leader found by walking the
+       manager chain up to the first person on the org's roster
+       ("highest leader within the span").
+    3. Nomination history (newest cycle first, incl. workbook imports).
+
+    Returns {name, designation, leader, is_leader, source} or None when
+    the alias is unknown everywhere.
+    """
+    email = _alias_to_email(alias)
+    if not org_id or not email:
+        return None
+    plain_alias = email.split("@", 1)[0]
+
+    roster = nps_leader_service.list_leaders(org_id)
+    for leader_entry in roster:
+        if leader_entry["alias"] == plain_alias:
+            return {
+                "name": leader_entry["name"],
+                "designation": "",
+                "leader": leader_entry["name"],
+                "is_leader": True,
+                "source": "roster",
+            }
+
+    papi_result = _lookup_from_papi(org_id, plain_alias)
+    if papi_result:
+        # History can still fill gaps PAPI leaves (e.g. leader when the
+        # chain didn't meet the roster, or a self-reported designation).
+        if not papi_result["leader"]:
+            history = _lookup_from_history(org_id, email)
+            if history and history["leader"]:
+                papi_result["leader"] = history["leader"]
+                papi_result["source"] = "papi+history"
+        return papi_result
+
+    return _lookup_from_history(org_id, email)
 
 
 def list_nominations_for_leader(org_id: str, cycle_id: str, leader: str) -> list[Nomination]:

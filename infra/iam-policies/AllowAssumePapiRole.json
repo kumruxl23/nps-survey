@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowAssumePapiIamAuthRole",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": [
+        "arn:aws:iam::220627861680:role/IAMAuth_nps-survey_*",
+        "arn:aws:iam::671313004605:role/IAMAuth_nps-survey_*"
+      ]
+    }
+  ]
+}
