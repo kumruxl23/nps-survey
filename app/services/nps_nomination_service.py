@@ -174,6 +174,57 @@ def nominate_stakeholder(
     return nps_nomination_repo.get_nomination(org_id, cycle_id, sort_key)
 
 
+def lookup_person(org_id: str, alias: str) -> dict | None:
+    """Best-effort person lookup from org data for form prefill.
+
+    Sources, in order:
+    1. The org's leader roster — if the alias IS a leader, their own name
+       comes back as the leader (a leader nominating for themselves).
+    2. Nomination history (newest cycle first, including workbook imports):
+       returns the person's recorded name, designation, and the leader
+       their records sit under — which for an org roster built from the
+       sponsor's directs is exactly the top leader within their span.
+
+    Returns {name, designation, leader, is_leader, source} or None when
+    the alias is unknown. NOTE: this is org-data driven, not an org-chart
+    API; people absent from every cycle's records need manual entry.
+    """
+    from app.db import nps_cycle_repo
+
+    email = _alias_to_email(alias)
+    if not org_id or not email:
+        return None
+    plain_alias = email.split("@", 1)[0]
+
+    roster = nps_leader_service.list_leaders(org_id)
+    for leader_entry in roster:
+        if leader_entry["alias"] == plain_alias:
+            return {
+                "name": leader_entry["name"],
+                "designation": "",
+                "leader": leader_entry["name"],
+                "is_leader": True,
+                "source": "roster",
+            }
+
+    cycles = sorted(
+        nps_cycle_repo.list_cycles(org_id),
+        key=lambda c: c.start_date or "",
+        reverse=True,
+    )
+    for cycle in cycles:
+        for nomination in nps_nomination_repo.list_nominations(org_id, cycle.cycle_id):
+            if base_email(nomination.email) == email:
+                return {
+                    "name": nomination.name,
+                    "designation": nomination.designation,
+                    "leader": nomination.leader,
+                    "is_leader": False,
+                    "source": f"history:{cycle.cycle_id}",
+                }
+    return None
+
+
 def list_nominations_for_leader(org_id: str, cycle_id: str, leader: str) -> list[Nomination]:
     """Return nominations under one leader for the given org/cycle."""
     leader = (leader or "").strip()

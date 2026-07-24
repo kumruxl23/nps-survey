@@ -29,6 +29,7 @@
           <div class="col-md-6">
             <label class="form-label">Org</label>
             <select id="org-select" class="form-select"></select>
+            <div id="org-locked" class="form-control-plaintext fw-semibold d-none"></div>
             <div id="cycle-info" class="form-text"></div>
           </div>
           <div class="col-md-6">
@@ -40,10 +41,12 @@
           <div class="col-md-6">
             <label class="form-label">Your alias (nominator) <span class="text-danger">*</span></label>
             <input id="nominator-alias" class="form-control" placeholder="e.g. kumruxl" autocomplete="off">
+            <div id="nominator-hint" class="form-text"></div>
           </div>
           <div class="col-md-6">
             <label class="form-label">Stakeholder alias <span class="text-danger">*</span></label>
             <input id="stakeholder-alias" class="form-control" placeholder="e.g. jdoe" autocomplete="off">
+            <div id="stakeholder-hint" class="form-text"></div>
           </div>
           <div class="col-md-6">
             <label class="form-label">Stakeholder name <span class="text-danger">*</span></label>
@@ -92,9 +95,9 @@
       </div>
       <div class="modal-body">
         <p class="text-muted small mb-3">
-          Sends the nomination form link to every leader on the roster
-          (BCC, one email) asking them to nominate their stakeholders
-          before the deadline.
+          Sends the selected org's nomination form link to that org's
+          leaders (BCC, one email) asking them to nominate their
+          stakeholders before the deadline.
         </p>
         <label class="form-label">Nomination deadline <span class="text-danger">*</span></label>
         <input id="invite-deadline" type="date" class="form-control mb-3">
@@ -151,18 +154,31 @@ function showAlert(kind, msg) {
 
 function aliasOf(email) { return (email || '').split('@')[0]; }
 
+let sharePaths = {};  // org_id -> capability path (admins/editors only)
+
+function populateLeaders() {
+  const org = activeOrg();
+  const leaders = (org && org.leaders) || [];
+  leaderSelect.innerHTML = '<option value="">-- select leader --</option>' +
+    leaders.map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+  leaderAliases = Object.fromEntries(leaders.map(l => [l.name, l.alias]));
+}
+
 async function loadContext() {
   const res = await fetch(withToken('/nps/nominate/context'));
   const data = await res.json();
-  if (data.share_path) {
+  sharePaths = data.share_paths || {};
+  if (Object.keys(sharePaths).length) {
     const btn = document.getElementById('share-btn');
     btn.classList.remove('d-none');
     document.getElementById('invite-btn').classList.remove('d-none');
     btn.addEventListener('click', async () => {
-      const url = location.origin + data.share_path;
+      const path = sharePaths[orgSelect.value];
+      if (!path) { showAlert('warning', 'No share link for this org.'); return; }
+      const url = location.origin + path;
       try {
         await navigator.clipboard.writeText(url);
-        showAlert('success', 'Share link copied — send it to your leaders. Anyone with the link can open this form (no login needed).');
+        showAlert('success', `Share link for <strong>${activeOrg().org_name}</strong> copied — it opens the form locked to this org only (no login needed).`);
       } catch (e) {
         prompt('Copy this link:', url);
       }
@@ -173,10 +189,60 @@ async function loadContext() {
   // Default to the first org that actually has an active cycle.
   const withCycle = orgs.find(o => o.active_cycle);
   if (withCycle) orgSelect.value = withCycle.org_id;
-  leaderSelect.innerHTML = '<option value="">-- select leader --</option>' +
-    (data.leaders || []).map(l => `<option value="${l.name}">${l.name}</option>`).join('');
-  leaderAliases = Object.fromEntries((data.leaders || []).map(l => [l.name, l.alias]));
+  if (data.locked_org) {
+    // Opened via an org share link: no org choice, show a static label.
+    orgSelect.value = data.locked_org;
+    orgSelect.classList.add('d-none');
+    const lockedEl = document.getElementById('org-locked');
+    lockedEl.textContent = (activeOrg() || {}).org_name || data.locked_org;
+    lockedEl.classList.remove('d-none');
+  }
+  populateLeaders();
   updateCycleInfo();
+}
+
+// ── Alias-driven prefill ─────────────────────────────────────────
+async function prefillFor(alias) {
+  if (!alias || !orgSelect.value) return null;
+  const res = await fetch(withToken(
+    `/nps/nominate/prefill?org_id=${encodeURIComponent(orgSelect.value)}&alias=${encodeURIComponent(alias)}`));
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.found ? data : null;
+}
+
+async function onNominatorBlur() {
+  const alias = document.getElementById('nominator-alias').value.trim();
+  const hint = document.getElementById('nominator-hint');
+  hint.textContent = '';
+  if (!alias) return;
+  const p = await prefillFor(alias);
+  if (p && p.leader && leaderAliases[p.leader] !== undefined) {
+    leaderSelect.value = p.leader;
+    hint.textContent = p.is_leader
+      ? `You're on the leader roster — leader set to you.`
+      : `Leader auto-set to ${p.leader} (from org records).`;
+    refreshTable();
+  } else {
+    hint.textContent = 'Alias not found in org records — pick your leader manually.';
+  }
+}
+
+async function onStakeholderBlur() {
+  const alias = document.getElementById('stakeholder-alias').value.trim();
+  const hint = document.getElementById('stakeholder-hint');
+  hint.textContent = '';
+  if (!alias) return;
+  const p = await prefillFor(alias);
+  if (p) {
+    const nameEl = document.getElementById('stakeholder-name');
+    const desigEl = document.getElementById('stakeholder-designation');
+    if (p.name && !nameEl.value.trim()) nameEl.value = p.name;
+    if (p.designation && !desigEl.value.trim()) desigEl.value = p.designation;
+    hint.textContent = 'Name/designation prefilled from org records — edit if outdated.';
+  } else {
+    hint.textContent = 'New stakeholder — please fill name (and designation) manually.';
+  }
 }
 
 function activeOrg() { return orgs.find(o => o.org_id === orgSelect.value); }
@@ -310,7 +376,7 @@ async function sendInvite() {
   const res = await fetch(withToken('/nps/nominate/invite'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deadline: deadline, note: note }),
+    body: JSON.stringify({ deadline: deadline, note: note, org_id: orgSelect.value }),
   });
   const data = await res.json();
   btn.disabled = false;
@@ -322,9 +388,11 @@ async function sendInvite() {
   }
 }
 
-orgSelect.addEventListener('change', () => { updateCycleInfo(); refreshTable(); });
+orgSelect.addEventListener('change', () => { populateLeaders(); updateCycleInfo(); refreshTable(); });
 leaderSelect.addEventListener('change', refreshTable);
 document.getElementById('nominator-alias').addEventListener('input', renderRows);
+document.getElementById('nominator-alias').addEventListener('blur', onNominatorBlur);
+document.getElementById('stakeholder-alias').addEventListener('blur', onStakeholderBlur);
 document.getElementById('invite-send-btn').addEventListener('click', sendInvite);
 document.getElementById('submit-btn').addEventListener('click', submitNomination);
 loadContext();

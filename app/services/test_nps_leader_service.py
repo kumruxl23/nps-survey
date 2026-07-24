@@ -28,7 +28,7 @@ def ddb_table():
 class TestAddLeader:
     def test_add_and_get(self, ddb_table):
         result = nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
-        assert result == {"alias": "nsbhatia", "name": "Navjyot Bhatia"}
+        assert result == {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": ""}
         assert nps_leader_service.get_leader("nsbhatia") == {
             "alias": "nsbhatia",
             "name": "Navjyot Bhatia",
@@ -69,6 +69,15 @@ class TestListLeaders:
         assert nps_leader_service.list_leaders() == []
         assert nps_leader_service.get_leader("raabhas") is None
 
+    def test_org_scoping(self, ddb_table):
+        nps_leader_service.add_leader("alpha1", "Alpha Leader", org_id="org_alpha")
+        nps_leader_service.add_leader("beta1", "Beta Leader", org_id="org_beta")
+        nps_leader_service.add_leader("legacy1", "Legacy Leader")  # unscoped
+
+        alpha = [l["alias"] for l in nps_leader_service.list_leaders("org_alpha")]
+        assert alpha == ["alpha1", "legacy1"]  # own + legacy, not beta's
+        assert len(nps_leader_service.list_leaders()) == 3  # unscoped = all
+
 
 class TestNoOrgPollution:
     def test_leader_rows_not_listed_as_orgs(self, ddb_table):
@@ -80,10 +89,11 @@ class TestNoOrgPollution:
 
 class TestSendNominationInvite:
     _URL = "http://localhost:5000/"
+    _ORG = "org_alpha"
 
     def _roster(self):
-        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
-        nps_leader_service.add_leader("raabhas", "Abhas Rao")
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id=self._ORG)
+        nps_leader_service.add_leader("raabhas", "Abhas Rao", org_id=self._ORG)
 
     @patch("app.services.email_client.send_bcc_email")
     def test_invite_sent_to_all_leaders_bcc(self, mock_send, ddb_table):
@@ -93,7 +103,7 @@ class TestSendNominationInvite:
         self._roster()
 
         result = nps_leader_service.send_nomination_invite(
-            self._URL, "2026-08-01", note="Please prioritize."
+            self._URL, "2026-08-01", note="Please prioritize.", org_id=self._ORG
         )
 
         assert result["sent_count"] == 2
@@ -105,20 +115,44 @@ class TestSendNominationInvite:
         assert "Deadline: 2026-08-01" in body
         assert "Please prioritize." in body
 
+    @patch("app.services.email_client.send_bcc_email")
+    def test_invite_scoped_to_org(self, mock_send, ddb_table):
+        from app.db.models import EmailResult
+
+        mock_send.return_value = EmailResult(ok=True)
+        self._roster()
+        nps_leader_service.add_leader("beta1", "Beta Leader", org_id="org_beta")
+
+        result = nps_leader_service.send_nomination_invite(
+            self._URL, "2026-08-01", org_id=self._ORG
+        )
+
+        assert result["sent_count"] == 2  # beta's leader NOT included
+        _s, body, recipients, _f = mock_send.call_args[0]
+        assert "beta1@amazon.com" not in recipients
+        # Link carries org_alpha's token, not org_beta's.
+        from app.services import nps_share_link_service
+        assert nps_share_link_service.get_or_create_token(self._ORG) in body
+
+    def test_requires_org(self, ddb_table):
+        self._roster()
+        with pytest.raises(ValueError, match="org_id"):
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")
+
     def test_requires_deadline(self, ddb_table):
         self._roster()
         with pytest.raises(ValueError, match="deadline"):
-            nps_leader_service.send_nomination_invite(self._URL, "")
+            nps_leader_service.send_nomination_invite(self._URL, "", org_id=self._ORG)
 
     def test_empty_roster_rejected(self, ddb_table):
         with pytest.raises(ValueError, match="roster is empty"):
-            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01", org_id=self._ORG)
 
     def test_demo_safe_blocks_invite(self, ddb_table, monkeypatch):
         self._roster()
         monkeypatch.setenv("NPS_DEMO_SAFE", "1")
         with pytest.raises(ValueError, match="Demo-safe"):
-            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01", org_id=self._ORG)
 
     @patch("app.services.email_client.send_bcc_email")
     def test_ses_failure_raises(self, mock_send, ddb_table):
@@ -127,4 +161,4 @@ class TestSendNominationInvite:
         mock_send.return_value = EmailResult(ok=False, error="SES down")
         self._roster()
         with pytest.raises(RuntimeError, match="SES down"):
-            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01")
+            nps_leader_service.send_nomination_invite(self._URL, "2026-08-01", org_id=self._ORG)

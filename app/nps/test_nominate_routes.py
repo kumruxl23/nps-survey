@@ -108,7 +108,11 @@ class TestNominateListAndContext:
         body = resp.get_json()
         assert body["orgs"][0]["org_id"] == _ORG
         assert body["orgs"][0]["active_cycle"]["cycle_name"] == "H2 2026"
-        assert body["leaders"] == [{"alias": "nsbhatia", "name": "Navjyot Bhatia"}]
+        # Leaders now ride on each org (org-scoped rosters).
+        assert body["orgs"][0]["leaders"] == [
+            {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": ""}
+        ]
+        assert body["locked_org"] is None
 
     def test_list_for_leader(self, client):
         _submit(client)
@@ -180,31 +184,34 @@ class TestShareLink:
         with client.session_transaction() as sess:
             sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
 
-    def _get_token(self, client):
+    def _get_token(self, client, org=_ORG):
         self._admin(client)
         resp = client.get("/nps/nominate/context")
-        share_path = resp.get_json()["share_path"]
+        share_path = resp.get_json()["share_paths"][org]
         self._logout(client)
         return share_path.split("token=", 1)[1]
 
-    def test_admin_context_includes_share_path(self, client):
+    def test_admin_context_includes_share_paths(self, client):
         self._admin(client)
         body = client.get("/nps/nominate/context").get_json()
-        assert body["share_path"].startswith("/nps/nominate/view?token=")
+        assert body["share_paths"][_ORG].startswith("/nps/nominate/view?token=")
 
-    def test_viewer_context_has_no_share_path(self, client):
+    def test_viewer_context_has_no_share_paths(self, client):
         body = client.get("/nps/nominate/context").get_json()
-        assert "share_path" not in body
+        assert "share_paths" not in body
 
     def test_token_grants_form_access_without_login(self, client):
         token = self._get_token(client)
         # Page renders
         resp = client.get(f"/nps/nominate/view?token={token}")
         assert resp.status_code == 200
-        # Context works, but never leaks the share link to token users
+        # Context works, is locked to the org, and never leaks share links
         resp = client.get(f"/nps/nominate/context?token={token}")
         assert resp.status_code == 200
-        assert "share_path" not in resp.get_json()
+        body = resp.get_json()
+        assert "share_paths" not in body
+        assert body["locked_org"] == _ORG
+        assert [o["org_id"] for o in body["orgs"]] == [_ORG]
         # Submit works
         resp = client.post(f"/nps/nominate/submit?token={token}", json={
             "org_id": _ORG,
@@ -234,7 +241,7 @@ class TestShareLink:
     def test_rotate_invalidates_old_token(self, client):
         token = self._get_token(client)
         self._admin(client)
-        resp = client.post("/nps/nominate/share-link/rotate")
+        resp = client.post("/nps/nominate/share-link/rotate", json={"org_id": _ORG})
         assert resp.status_code == 200
         new_token = resp.get_json()["share_path"].split("token=", 1)[1]
         self._logout(client)
@@ -242,7 +249,22 @@ class TestShareLink:
         assert client.get(f"/nps/nominate/view?token={new_token}").status_code == 200
 
     def test_rotate_requires_admin(self, client):
-        resp = client.post("/nps/nominate/share-link/rotate")
+        resp = client.post("/nps/nominate/share-link/rotate", json={"org_id": _ORG})
+        assert resp.status_code == 403
+
+    def test_token_locked_to_its_org(self, client):
+        """A share token must not read or write another org's data."""
+        token = self._get_token(client)
+        resp = client.get(
+            f"/nps/nominate/list?org_id=other_org&leader=X&token={token}")
+        assert resp.status_code == 403
+        resp = client.post(f"/nps/nominate/submit?token={token}", json={
+            "org_id": "other_org", "leader": "X", "nominated_by": "a",
+            "stakeholder_alias": "b", "name": "B",
+        })
+        assert resp.status_code == 403
+        resp = client.get(
+            f"/nps/nominate/prefill?org_id=other_org&alias=jdoe&token={token}")
         assert resp.status_code == 403
 
 
@@ -259,7 +281,8 @@ class TestNominateInviteRoute:
             sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
         with patch("app.services.email_client.send_bcc_email") as mock_send:
             mock_send.return_value = EmailResult(ok=True)
-            resp = client.post("/nps/nominate/invite", json={"deadline": "2026-08-01"})
+            resp = client.post("/nps/nominate/invite",
+                               json={"deadline": "2026-08-01", "org_id": _ORG})
         assert resp.status_code == 200
         assert resp.get_json()["sent_count"] == 1  # fixture seeds one leader
         # Link in the email uses the request host
@@ -271,3 +294,41 @@ class TestNominateInviteRoute:
             sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
         resp = client.post("/nps/nominate/invite", json={})
         assert resp.status_code == 400
+
+
+class TestPrefill:
+    """Alias-driven prefill: leader auto-resolution + stakeholder details."""
+
+    def test_stakeholder_history_prefill(self, client):
+        # Seed one nomination via the form, then look the person up.
+        _submit(client, stakeholder_alias="jdoe", name="John Doe",
+                designation="Sr. PM")
+        resp = client.get(f"/nps/nominate/prefill?org_id={_ORG}&alias=jdoe")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["found"] is True
+        assert body["name"] == "John Doe"
+        assert body["designation"] == "Sr. PM"
+        assert body["leader"] == "Navjyot Bhatia"
+
+    def test_nominator_resolves_to_their_leader(self, client):
+        # jdoe sits under Navjyot in history -> nominating as jdoe should
+        # surface Navjyot as the leader.
+        _submit(client, stakeholder_alias="jdoe", name="John Doe")
+        resp = client.get(f"/nps/nominate/prefill?org_id={_ORG}&alias=jdoe@amazon.com")
+        assert resp.get_json()["leader"] == "Navjyot Bhatia"
+
+    def test_roster_leader_resolves_to_self(self, client):
+        resp = client.get(f"/nps/nominate/prefill?org_id={_ORG}&alias=nsbhatia")
+        body = resp.get_json()
+        assert body["found"] is True
+        assert body["is_leader"] is True
+        assert body["leader"] == "Navjyot Bhatia"
+
+    def test_unknown_alias_not_found(self, client):
+        resp = client.get(f"/nps/nominate/prefill?org_id={_ORG}&alias=ghost")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"found": False}
+
+    def test_requires_params(self, client):
+        assert client.get("/nps/nominate/prefill").status_code == 400

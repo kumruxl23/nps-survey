@@ -29,10 +29,15 @@ def _normalize_alias(alias: str) -> str:
     return alias.split("@", 1)[0]
 
 
-def add_leader(alias: str, name: str) -> dict:
-    """Add a leader to the roster. Raises ValueError on bad input/duplicate."""
+def add_leader(alias: str, name: str, org_id: str = "") -> dict:
+    """Add a leader to the roster. Raises ValueError on bad input/duplicate.
+
+    ``org_id`` scopes the leader to one org's nomination form. Empty means
+    the leader appears for every org (legacy rows behave the same way).
+    """
     alias = _normalize_alias(alias)
     name = (name or "").strip()
+    org_id = (org_id or "").strip()
     if not alias or not name:
         raise ValueError("Leader alias and name are required")
 
@@ -45,13 +50,19 @@ def add_leader(alias: str, name: str) -> dict:
     table.put_item(Item={
         "org_id": key,
         "org_name": name,
+        "leader_org": org_id,
         "is_active": True,
     })
-    return {"alias": alias, "name": name}
+    return {"alias": alias, "name": name, "org_id": org_id}
 
 
-def list_leaders() -> list[dict]:
-    """Return all active leaders as [{alias, name}], sorted by name."""
+def list_leaders(org_id: str = "") -> list[dict]:
+    """Return active leaders as [{alias, name, org_id}], sorted by name.
+
+    With ``org_id`` set, returns that org's leaders plus unscoped (legacy)
+    leaders. Without it, returns everyone.
+    """
+    org_id = (org_id or "").strip()
     table = _get_table()
     response = table.scan()
     items = response.get("Items", [])
@@ -59,14 +70,18 @@ def list_leaders() -> list[dict]:
         response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
         items.extend(response.get("Items", []))
 
-    leaders = [
-        {
+    leaders = []
+    for item in items:
+        if not item["org_id"].startswith(LEADER_PREFIX) or not item.get("is_active", True):
+            continue
+        leader_org = item.get("leader_org", "") or ""
+        if org_id and leader_org and leader_org != org_id:
+            continue
+        leaders.append({
             "alias": item["org_id"].removeprefix(LEADER_PREFIX),
             "name": item.get("org_name", ""),
-        }
-        for item in items
-        if item["org_id"].startswith(LEADER_PREFIX) and item.get("is_active", True)
-    ]
+            "org_id": leader_org,
+        })
     return sorted(leaders, key=lambda leader: leader["name"].lower())
 
 
@@ -119,11 +134,11 @@ def _build_invite_body(link: str, deadline: str, note: str) -> str:
     )
 
 
-def send_nomination_invite(base_url: str, deadline: str, note: str = "") -> dict:
-    """Email every leader on the roster the nomination form share link.
+def send_nomination_invite(base_url: str, deadline: str, note: str = "", org_id: str = "") -> dict:
+    """Email one org's leaders that org's nomination form share link.
 
-    All recipients are BCC'd. Raises ValueError when the roster is empty,
-    the deadline is missing, or demo-safe mode is on.
+    All recipients are BCC'd. Raises ValueError when org_id is missing,
+    the roster is empty, the deadline is missing, or demo-safe mode is on.
     """
     from app.services import email_client, nps_share_link_service
 
@@ -132,14 +147,17 @@ def send_nomination_invite(base_url: str, deadline: str, note: str = "") -> dict
             "Demo-safe mode is ON (NPS_DEMO_SAFE) — invite emails to real "
             "leaders are disabled."
         )
+    org_id = (org_id or "").strip()
+    if not org_id:
+        raise ValueError("org_id is required — invites are sent per org")
     deadline = (deadline or "").strip()
     if not deadline:
         raise ValueError("A nomination deadline is required")
-    leaders = list_leaders()
+    leaders = list_leaders(org_id)
     if not leaders:
         raise ValueError("The leader roster is empty — add leaders first")
 
-    token = nps_share_link_service.get_or_create_token()
+    token = nps_share_link_service.get_or_create_token(org_id)
     link = f"{base_url.rstrip('/')}/nps/nominate/view?token={token}"
 
     subject = f"Action needed: nominate your NPS survey stakeholders by {deadline}"

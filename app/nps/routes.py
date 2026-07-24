@@ -9,7 +9,7 @@ import functools
 import logging
 import os
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, g, jsonify, redirect, render_template, request, session, url_for
 
 from app.services import (
     nps_cycle_service,
@@ -300,14 +300,25 @@ def login_or_share_token(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         if "user" in session:
+            g.share_org_id = None  # session auth: no org restriction
             return f(*args, **kwargs)
-        if nps_share_link_service.verify_token(request.args.get("token", "")):
+        share_org = nps_share_link_service.resolve_token(request.args.get("token", ""))
+        if share_org:
+            g.share_org_id = share_org  # token auth: locked to this org
             return f(*args, **kwargs)
         if request.is_json or request.headers.get("Accept") == "application/json":
             return jsonify({"error": "Authentication required"}), 401
         return redirect(url_for("auth.login_page"))
 
     return wrapper
+
+
+def _share_org_mismatch(org_id: str):
+    """403 response when a share-token caller touches another org, else None."""
+    share_org = getattr(g, "share_org_id", None)
+    if share_org and org_id != share_org:
+        return jsonify({"error": "This link is limited to one org"}), 403
+    return None
 
 
 @nps_bp.route("/leaders", methods=["GET"])
@@ -328,7 +339,9 @@ def add_leader():
     try:
         data = request.json or {}
         leader = nps_leader_service.add_leader(
-            alias=data.get("alias", ""), name=data.get("name", "")
+            alias=data.get("alias", ""),
+            name=data.get("name", ""),
+            org_id=data.get("org_id", ""),
         )
         return jsonify(leader), 201
     except ValueError as exc:
@@ -357,21 +370,25 @@ def nominate_view():
 @nps_bp.route("/nominate/share-link/rotate", methods=["POST"])
 @role_required("admin")
 def rotate_share_link():
-    """Invalidate the current share link and issue a fresh one."""
-    token = nps_share_link_service.rotate_token()
-    return jsonify({"share_path": f"/nps/nominate/view?token={token}"})
+    """Invalidate one org's share link and issue a fresh one."""
+    org_id = (request.json or {}).get("org_id", "")
+    if not org_id:
+        return jsonify({"error": "org_id is required"}), 400
+    token = nps_share_link_service.rotate_token(org_id)
+    return jsonify({"org_id": org_id, "share_path": f"/nps/nominate/view?token={token}"})
 
 
 @nps_bp.route("/nominate/invite", methods=["POST"])
 @role_required("admin", "editor")
 def send_nomination_invite():
-    """Email all roster leaders the form link with a nomination deadline."""
+    """Email one org's leaders that org's form link with a deadline."""
     try:
         data = request.json or {}
         result = nps_leader_service.send_nomination_invite(
             base_url=request.host_url,
             deadline=data.get("deadline", ""),
             note=data.get("note", ""),
+            org_id=data.get("org_id", ""),
         )
         return jsonify(result)
     except ValueError as exc:
@@ -381,17 +398,51 @@ def send_nomination_invite():
         return jsonify({"error": str(exc)}), 500
 
 
+@nps_bp.route("/nominate/prefill", methods=["GET"])
+@login_or_share_token
+def nominate_prefill():
+    """Best-effort prefill data for an alias (name/designation/leader).
+
+    Looks the alias up in the org's leader roster and nomination history
+    (workbook imports included). Returns {found: false} for unknown
+    aliases — the form then falls back to manual entry.
+    """
+    try:
+        org_id = request.args.get("org_id", "")
+        alias = request.args.get("alias", "")
+        if not org_id or not alias:
+            return jsonify({"error": "org_id and alias query params are required"}), 400
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
+        person = nps_nomination_service.lookup_person(org_id, alias)
+        if not person:
+            return jsonify({"found": False})
+        return jsonify({"found": True, **person})
+    except Exception as exc:
+        logger.exception("Error prefetching person data")
+        return jsonify({"error": str(exc)}), 500
+
+
 @nps_bp.route("/nominate/context", methods=["GET"])
 @login_or_share_token
 def nominate_context():
-    """Data the nomination form needs: orgs with active cycles + leaders."""
+    """Data the nomination form needs: orgs with active cycles + leaders.
+
+    Share-token callers get ONLY their org (locked); logged-in users see
+    all active orgs with leaders scoped per org.
+    """
     try:
+        share_org = getattr(g, "share_org_id", None)
         orgs = []
         for org in nps_org_config_service.list_active_orgs():
+            if share_org and org.org_id != share_org:
+                continue
             cycle = nps_cycle_service.get_active_cycle(org.org_id)
             orgs.append({
                 "org_id": org.org_id,
                 "org_name": org.org_name,
+                "leaders": nps_leader_service.list_leaders(org.org_id),
                 "active_cycle": (
                     {
                         "cycle_id": cycle.cycle_id,
@@ -402,12 +453,15 @@ def nominate_context():
                     else None
                 ),
             })
-        payload = {"orgs": orgs, "leaders": nps_leader_service.list_leaders()}
-        # Admins/editors get the shareable capability URL for the form so
-        # they can send it to leaders (who have no app accounts).
+        payload = {"orgs": orgs, "locked_org": share_org}
+        # Admins/editors get per-org shareable capability URLs so they can
+        # send each org's leaders their own link (no login needed).
         if session.get("user", {}).get("role") in ("admin", "editor"):
-            token = nps_share_link_service.get_or_create_token()
-            payload["share_path"] = f"/nps/nominate/view?token={token}"
+            payload["share_paths"] = {
+                o["org_id"]: "/nps/nominate/view?token="
+                + nps_share_link_service.get_or_create_token(o["org_id"])
+                for o in orgs
+            }
         return jsonify(payload)
     except Exception as exc:
         logger.exception("Error building nomination form context")
@@ -423,6 +477,9 @@ def nominate_list():
         leader = request.args.get("leader", "")
         if not org_id or not leader:
             return jsonify({"error": "org_id and leader query params are required"}), 400
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
         cycle = nps_cycle_service.get_active_cycle(org_id)
         if not cycle:
             return jsonify({"error": f"No active cycle for org '{org_id}'"}), 404
@@ -457,6 +514,9 @@ def nominate_submit():
     try:
         data = request.json or {}
         org_id = data.get("org_id", "")
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
         cycle = nps_cycle_service.get_active_cycle(org_id) if org_id else None
         if not cycle:
             return jsonify({"error": "No active survey cycle for this org"}), 400
@@ -497,6 +557,9 @@ def nominate_remove():
     try:
         data = request.json or {}
         org_id = data.get("org_id", "")
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
         cycle = nps_cycle_service.get_active_cycle(org_id) if org_id else None
         if not cycle:
             return jsonify({"error": "No active survey cycle for this org"}), 400
