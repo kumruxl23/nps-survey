@@ -117,6 +117,16 @@ def create_app(config=None):
     app.register_blueprint(nps_bp)
     app.register_blueprint(auth_bp)
 
+    @app.route("/health")
+    def health():
+        """Unauthenticated liveness probe for the ALB health check.
+
+        The ALB's OIDC (Midway) authentication only applies to real user
+        traffic; health checks hit the target directly, so this must not
+        require a session. Returns no data beyond liveness.
+        """
+        return {"status": "ok"}, 200
+
     if not app.config.get("TESTING"):
         # Create DynamoDB tables only when explicitly opted in (dev/local
         # bootstrap). In production, tables are pre-created and the EC2
