@@ -75,6 +75,18 @@ NEXT UP:
   the serving path.
 - NOTE: Federate client secret was pasted in chat during setup —
   regenerate it in Federate + update listener/secret when convenient.
+- **Midway auto-login SHIPPED (2026-07-24)**: NPS_MIDWAY_AUTH=1 — app
+  reads X-Amzn-Oidc-Identity from the ALB, maps alias→role from the
+  user store, password form disabled in prod (kept for local dev).
+  Unknown aliases get an access-request page. /health endpoint added
+  (unauthenticated, exempt from Host guard) — ALB health check moved
+  to it; target HEALTHY. Deployed current main to EC2 via
+  infra/ssm_deploy.py (chunked base64 over SSM; SSH is closed) — this
+  also took the leader-nominations feature live (still needs its
+  GitFarm CR; prod runs ahead of mainline temporarily). bcrypt
+  installed on the instance (new dep). Users provisioned: kumruxl
+  (admin), kuvinu (admin). Legacy __user__admin left ACTIVE as
+  rollback insurance — deactivate after browser verification.
 
 ## Project
 Internal NPS Survey tool (Flask + Python 3.11) for WHS CPT IN/NA + FEC
