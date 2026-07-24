@@ -299,6 +299,11 @@ def login_or_share_token(f):
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        if "user" not in session:
+            # Midway-mode: the ALB already authenticated this person;
+            # establish their session like login_required does.
+            from app.nps.auth_routes import _try_midway_auth
+            _try_midway_auth()
         if "user" in session:
             g.share_org_id = None  # session auth: no org restriction
             return f(*args, **kwargs)
