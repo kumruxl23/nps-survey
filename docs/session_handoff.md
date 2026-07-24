@@ -41,6 +41,20 @@ roster, first-come-first-served per leader/cycle, share-token capability
 link, invite-leaders email with deadline. 339 tests. MUST go to GitFarm
 via feature branch + CR (do NOT push straight to mainline).
 
+UPDATE 2026-07-24 (later): **Org-specific nomination links + alias
+prefill SHIPPED** (commits 2a44608 + fix). Per-org share tokens
+(`__share__nominate_form#<org>` rows; old global token dead); token
+access locked server-side to its org (403 cross-org on context/list/
+submit/remove/prefill); leader roster org-scoped (leader_org attr;
+unscoped = all orgs); invites per org. New /nps/nominate/prefill:
+alias → {name, designation, leader} from roster + nomination history
+(workbook imports count) — nominator's leader auto-selects, stakeholder
+details prepopulate. True org-chart resolution would need PAPI
+(follow-up if wanted). Deployed + smoke-tested via SSM (prefill 200,
+per-org tokens in context). Suite at 359. NOTE: prod leader rosters
+are EMPTY (all 3 orgs) — add leaders per org via
+POST /nps/leaders/add {alias, name, org_id}; no UI for this yet.
+
 NEXT UP:
 1. Nomination-feature CR: laptop `git pull internal mainline` (merge the
    BrazilPython commit), push GitHub; push feature branch to GitFarm
