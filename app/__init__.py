@@ -84,6 +84,10 @@ def _install_allowed_hosts(app):
 
     @app.before_request
     def _check_host():  # pragma: no cover - exercised via test client below
+        if request.path == "/health":
+            # ALB health checks address the target by IP, not the public
+            # hostname; the liveness probe carries no data worth guarding.
+            return None
         host = (request.host or "").split(":", 1)[0].lower()
         if host and host not in allowed:
             abort(400, description="Invalid Host header")
