@@ -577,15 +577,11 @@ def nominate_submit():
         if not nominator:
             return jsonify({"error": "Could not establish your identity"}), 401
 
-        # Regular users: the leader is system-resolved from their org
-        # records / manager chain. Admins, editors, and roster leaders may
-        # pick a leader explicitly (nominating on someone's behalf).
-        leader = ""
-        if _is_privileged_for_org(org_id):
-            leader = data.get("leader", "")
-        if not leader:
-            person = nps_nomination_service.lookup_person(org_id, nominator)
-            leader = (person or {}).get("leader", "")
+        # The leader is ALWAYS system-resolved from the nominator's org
+        # records / manager chain — never client-chosen, for anyone. The
+        # leader dropdown in the UI is purely a viewing filter.
+        person = nps_nomination_service.lookup_person(org_id, nominator)
+        leader = (person or {}).get("leader", "")
         if not leader:
             return jsonify({
                 "error": "Could not determine your leader for this org — "

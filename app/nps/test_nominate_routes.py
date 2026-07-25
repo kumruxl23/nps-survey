@@ -5,7 +5,7 @@ from moto import mock_aws
 
 from app import create_app
 from app.db import nps_cycle_repo, nps_nomination_repo, nps_org_config_repo
-from app.db.models import OrgConfig, SurveyCycle
+from app.db.models import Nomination, OrgConfig, SurveyCycle
 from app.services import nps_leader_service
 
 
@@ -49,12 +49,17 @@ def client():
             cycle_name="H2 2026",
         ))
         nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
+        # direct1 appears in org history under Navjyot — the leader the
+        # system will resolve for their nominations.
+        nps_nomination_repo.put_nomination(Nomination(
+            org_id=_ORG, cycle_id=_CYCLE, email="direct1@amazon.com",
+            name="Direct One", leader="Navjyot Bhatia",
+        ))
 
         app = create_app({"TESTING": True})
         client = app.test_client()
-        # direct1 is an editor: privileged (may pick a leader explicitly).
-        # The nominator identity is ALWAYS derived server-side from the
-        # session/ALB — never from the request body.
+        # direct1 is an editor: privileged (full visibility). The nominator
+        # identity AND leader are always derived server-side.
         with client.session_transaction() as sess:
             sess["user"] = {"username": "direct1", "role": "editor", "display_name": "D"}
         yield client
@@ -68,7 +73,6 @@ def _set_user(client, username, role):
 def _submit(client, **overrides):
     payload = {
         "org_id": _ORG,
-        "leader": "Navjyot Bhatia",
         "stakeholder_alias": "jdoe",
         "name": "John Doe",
         "designation": "Sr. PM",
@@ -89,6 +93,11 @@ class TestNominateSubmit:
     def test_nominated_by_cannot_be_spoofed(self, client):
         resp = _submit(client, nominated_by="someone-else")
         assert resp.get_json()["nominated_by"] == "direct1"
+
+    def test_leader_cannot_be_chosen_even_by_privileged(self, client):
+        resp = _submit(client, leader="Someone Else")
+        assert resp.status_code == 201
+        assert resp.get_json()["leader"] == "Navjyot Bhatia"  # system-resolved
 
     def test_duplicate_returns_409_with_existing_details(self, client):
         _submit(client)
@@ -163,9 +172,8 @@ class TestNominateListAndContext:
         )
         assert resp.status_code == 200
         rows = resp.get_json()
-        assert len(rows) == 1
-        assert rows[0]["email"] == "jdoe@amazon.com"
-        assert rows[0]["nominated_by"] == "direct1"
+        jdoe = next(r for r in rows if r["email"] == "jdoe@amazon.com")
+        assert jdoe["nominated_by"] == "direct1"
 
     def test_regular_user_cannot_list_nominations(self, client):
         _submit(client)
@@ -182,7 +190,8 @@ class TestNominateListAndContext:
             f"/nps/nominate/list?org_id={_ORG}&leader=Navjyot%20Bhatia"
         )
         assert resp.status_code == 200
-        assert len(resp.get_json()) == 1
+        emails = [r["email"] for r in resp.get_json()]
+        assert "jdoe@amazon.com" in emails
 
 
 class TestNominateRemove:
