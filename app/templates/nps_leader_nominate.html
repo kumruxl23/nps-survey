@@ -223,10 +223,16 @@ async function onNominatorBlur() {
       ? `You're on the leader roster — leader set to you.`
       : `Leader auto-set to ${p.leader} (from org records).`;
     refreshTable();
+  } else if (p) {
+    hint.textContent = `Found ${p.name || alias}, but no leader could be auto-selected for this org — pick your leader manually.`;
   } else {
-    hint.textContent = 'Alias not found in org records — pick your leader manually.';
+    hint.textContent = 'Alias not found in the directory or org records — pick your leader manually.';
   }
 }
+
+// Remember what WE prefilled, so a new alias lookup can safely replace
+// earlier prefills without clobbering anything the user typed by hand.
+let lastPrefill = { name: '', designation: '' };
 
 async function onStakeholderBlur() {
   const alias = document.getElementById('stakeholder-alias').value.trim();
@@ -234,14 +240,19 @@ async function onStakeholderBlur() {
   hint.textContent = '';
   if (!alias) return;
   const p = await prefillFor(alias);
+  const nameEl = document.getElementById('stakeholder-name');
+  const desigEl = document.getElementById('stakeholder-designation');
+  const nameUntouched = !nameEl.value.trim() || nameEl.value === lastPrefill.name;
+  const desigUntouched = !desigEl.value.trim() || desigEl.value === lastPrefill.designation;
   if (p) {
-    const nameEl = document.getElementById('stakeholder-name');
-    const desigEl = document.getElementById('stakeholder-designation');
-    if (p.name && !nameEl.value.trim()) nameEl.value = p.name;
-    if (p.designation && !desigEl.value.trim()) desigEl.value = p.designation;
-    hint.textContent = 'Name/designation prefilled from org records — edit if outdated.';
+    if (p.name && nameUntouched) { nameEl.value = p.name; lastPrefill.name = p.name; }
+    if (desigUntouched) { desigEl.value = p.designation || ''; lastPrefill.designation = p.designation || ''; }
+    hint.textContent = 'Name/designation prefilled from the directory — edit if needed.';
   } else {
-    hint.textContent = 'New stakeholder — please fill name (and designation) manually.';
+    // Unknown alias: clear stale prefills from a previous lookup.
+    if (nameUntouched) { nameEl.value = ''; lastPrefill.name = ''; }
+    if (desigUntouched) { desigEl.value = ''; lastPrefill.designation = ''; }
+    hint.textContent = 'Alias not found — please fill name (and designation) manually.';
   }
 }
 
