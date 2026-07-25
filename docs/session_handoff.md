@@ -41,12 +41,15 @@ GitFarm mainline, CR pending (top priority)**.
    CR → pipeline → Apollo). SLAB Option A SDK swap also rides on this.
 
 ### PENDING — ASR / DI threat model / Kale
-1. **DI threat model**: add PAPI as an internal-service boundary (same
-   pattern as OPUS SLAB in v449) + transient data element "employee
-   directory record (name/title/supervisor chain)". Also reflect the
-   identity-driven form (leader auto-resolution). Re-run scan, publish
-   new version, attach export to ASR Threat Model task. Current
-   published = v449 (0 unmitigated / 28 mitigated / 1 FP).
+1. **DI threat model**: DONE 2026-07-25 — published **v747**
+   (NPSSurveyReminders-747.html; 0 unmitigated / 33 mitigated / 1 FP;
+   supersedes v449). Added PAPI internal-service boundary + transient
+   "Employee directory record" data element (Confidential) + ALB/Midway
+   edge (identity-driven form). Modeled on Page-1; Architecture page is
+   presentation-only. All PAPI + ALB threats marked Mitigated (text in
+   docs/papi_threat_model_delta.md). Threat Model ASR task = Complete.
+   TODO: attach NPSSurveyReminders-747.html to the ASR Threat Model task
+   (Attachments) as updated evidence.
 2. **Kale**: add PAPI as a data source in the app description (Veritas
    33d9f777-6675-4612-bf3e-640960c021ad); review is In Review with
    kale-wrkplace-hlth-safety — NUDGE via Smruthi thread P441140532 if
