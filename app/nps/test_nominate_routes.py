@@ -52,16 +52,23 @@ def client():
 
         app = create_app({"TESTING": True})
         client = app.test_client()
+        # direct1 is an editor: privileged (may pick a leader explicitly).
+        # The nominator identity is ALWAYS derived server-side from the
+        # session/ALB — never from the request body.
         with client.session_transaction() as sess:
-            sess["user"] = {"username": "viewer1", "role": "viewer", "display_name": "V"}
+            sess["user"] = {"username": "direct1", "role": "editor", "display_name": "D"}
         yield client
+
+
+def _set_user(client, username, role):
+    with client.session_transaction() as sess:
+        sess["user"] = {"username": username, "role": role, "display_name": username}
 
 
 def _submit(client, **overrides):
     payload = {
         "org_id": _ORG,
         "leader": "Navjyot Bhatia",
-        "nominated_by": "direct1",
         "stakeholder_alias": "jdoe",
         "name": "John Doe",
         "designation": "Sr. PM",
@@ -77,16 +84,39 @@ class TestNominateSubmit:
         body = resp.get_json()
         assert body["email"] == "jdoe@amazon.com"
         assert body["leader"] == "Navjyot Bhatia"
-        assert body["nominated_by"] == "direct1"
+        assert body["nominated_by"] == "direct1"  # from session identity
+
+    def test_nominated_by_cannot_be_spoofed(self, client):
+        resp = _submit(client, nominated_by="someone-else")
+        assert resp.get_json()["nominated_by"] == "direct1"
 
     def test_duplicate_returns_409_with_existing_details(self, client):
         _submit(client)
-        resp = _submit(client, nominated_by="direct2")
+        resp = _submit(client)
         assert resp.status_code == 409
         body = resp.get_json()
         assert body["duplicate"] is True
         assert body["existing"]["nominated_by"] == "direct1"
         assert body["existing"]["leader"] == "Navjyot Bhatia"
+
+    def test_regular_user_gets_system_resolved_leader(self, client):
+        # Seed: kumruxl appears in history under Navjyot (workbook-style).
+        _submit(client, stakeholder_alias="kumruxl", name="Rohit Kumar")
+        # kumruxl (regular viewer) nominates: leader resolved from history,
+        # client-supplied leader is ignored.
+        _set_user(client, "kumruxl", "viewer")
+        resp = _submit(client, stakeholder_alias="newguy", name="New Guy",
+                       leader="Someone Else")
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body["leader"] == "Navjyot Bhatia"
+        assert body["nominated_by"] == "kumruxl"
+
+    def test_regular_user_unresolvable_leader_rejected(self, client):
+        _set_user(client, "ghost", "viewer")
+        resp = _submit(client)
+        assert resp.status_code == 400
+        assert "leader" in resp.get_json()["error"].lower()
 
     def test_no_active_cycle_rejected(self, client):
         nps_cycle_repo.update_cycle(_ORG, _CYCLE, status="closed")
@@ -113,6 +143,18 @@ class TestNominateListAndContext:
             {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": ""}
         ]
         assert body["locked_org"] is None
+        assert body["viewer"]["alias"] == "direct1"
+        assert body["viewer"]["privileged_orgs"][_ORG] is True  # editor
+
+    def test_viewer_is_not_privileged(self, client):
+        _set_user(client, "someguy", "viewer")
+        body = client.get("/nps/nominate/context").get_json()
+        assert body["viewer"]["privileged_orgs"][_ORG] is False
+
+    def test_roster_leader_is_privileged(self, client):
+        _set_user(client, "nsbhatia", "viewer")  # on the org roster
+        body = client.get("/nps/nominate/context").get_json()
+        assert body["viewer"]["privileged_orgs"][_ORG] is True
 
     def test_list_for_leader(self, client):
         _submit(client)
@@ -125,36 +167,63 @@ class TestNominateListAndContext:
         assert rows[0]["email"] == "jdoe@amazon.com"
         assert rows[0]["nominated_by"] == "direct1"
 
+    def test_regular_user_cannot_list_nominations(self, client):
+        _submit(client)
+        _set_user(client, "someguy", "viewer")
+        resp = client.get(
+            f"/nps/nominate/list?org_id={_ORG}&leader=Navjyot%20Bhatia"
+        )
+        assert resp.status_code == 403
+
+    def test_roster_leader_can_list_nominations(self, client):
+        _submit(client)
+        _set_user(client, "nsbhatia", "viewer")
+        resp = client.get(
+            f"/nps/nominate/list?org_id={_ORG}&leader=Navjyot%20Bhatia"
+        )
+        assert resp.status_code == 200
+        assert len(resp.get_json()) == 1
+
 
 class TestNominateRemove:
-    def _remove(self, client, requested_by):
+    def _remove(self, client):
         return client.post("/nps/nominate/remove", json={
             "org_id": _ORG,
             "leader": "Navjyot Bhatia",
             "stakeholder_alias": "jdoe",
-            "requested_by": requested_by,
         })
 
     def test_nominator_can_remove(self, client):
-        _submit(client)
-        resp = self._remove(client, "direct1")
+        _submit(client)  # nominated_by=direct1 (session identity)
+        _set_user(client, "direct1", "viewer")  # same person, plain role
+        resp = self._remove(client)
         assert resp.status_code == 200
 
     def test_stranger_gets_403(self, client):
         _submit(client)
-        resp = self._remove(client, "rando")
+        _set_user(client, "rando", "viewer")
+        resp = self._remove(client)
+        assert resp.status_code == 403
+
+    def test_requested_by_in_body_is_ignored(self, client):
+        _submit(client)
+        _set_user(client, "rando", "viewer")
+        resp = client.post("/nps/nominate/remove", json={
+            "org_id": _ORG, "leader": "Navjyot Bhatia",
+            "stakeholder_alias": "jdoe", "requested_by": "direct1",  # spoof try
+        })
         assert resp.status_code == 403
 
     def test_admin_session_can_remove_regardless(self, client):
         _submit(client)
-        with client.session_transaction() as sess:
-            sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
-        resp = self._remove(client, "rando")
+        _set_user(client, "admin", "admin")
+        resp = self._remove(client)
         assert resp.status_code == 200
 
 
 class TestLeaderRosterRoutes:
     def test_viewer_cannot_manage_roster(self, client):
+        _set_user(client, "someguy", "viewer")
         resp = client.post("/nps/leaders/add", json={"alias": "x", "name": "X"})
         assert resp.status_code == 403
 
@@ -197,10 +266,11 @@ class TestShareLink:
         assert body["share_paths"][_ORG].startswith("/nps/nominate/view?token=")
 
     def test_viewer_context_has_no_share_paths(self, client):
+        _set_user(client, "someguy", "viewer")
         body = client.get("/nps/nominate/context").get_json()
         assert "share_paths" not in body
 
-    def test_token_grants_form_access_without_login(self, client):
+    def test_token_grants_form_access_without_login(self, client, monkeypatch):
         token = self._get_token(client)
         # Page renders
         resp = client.get(f"/nps/nominate/view?token={token}")
@@ -212,15 +282,20 @@ class TestShareLink:
         assert "share_paths" not in body
         assert body["locked_org"] == _ORG
         assert [o["org_id"] for o in body["orgs"]] == [_ORG]
-        # Submit works
-        resp = client.post(f"/nps/nominate/submit?token={token}", json={
-            "org_id": _ORG,
-            "leader": "Navjyot Bhatia",
-            "nominated_by": "leaderx",
-            "stakeholder_alias": "tokuser",
-            "name": "Token User",
-        })
+        # Submit works — identity comes from the ALB header (Midway mode);
+        # roster leader nsbhatia nominates, resolving to themselves.
+        monkeypatch.setenv("NPS_MIDWAY_AUTH", "1")
+        resp = client.post(f"/nps/nominate/submit?token={token}",
+                           headers={"X-Amzn-Oidc-Identity": "nsbhatia"},
+                           json={
+                               "org_id": _ORG,
+                               "stakeholder_alias": "tokuser",
+                               "name": "Token User",
+                           })
         assert resp.status_code == 201
+        body = resp.get_json()
+        assert body["nominated_by"] == "nsbhatia"
+        assert body["leader"] == "Navjyot Bhatia"  # roster self-resolution
 
     def test_bad_token_rejected(self, client):
         self._logout(client)
@@ -270,6 +345,7 @@ class TestShareLink:
 
 class TestNominateInviteRoute:
     def test_viewer_cannot_invite(self, client):
+        _set_user(client, "someguy", "viewer")
         resp = client.post("/nps/nominate/invite", json={"deadline": "2026-08-01"})
         assert resp.status_code == 403
 

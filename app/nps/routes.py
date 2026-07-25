@@ -288,32 +288,48 @@ def remove_nomination():
 # ---------------------------------------------------------------------------
 
 
-def login_or_share_token(f):
-    """Allow a logged-in session OR a valid nomination-form share token.
+def _midway_header_alias() -> str:
+    """The Midway alias the ALB asserted, when Midway mode is on."""
+    import os as _os
+    if _os.environ.get("NPS_MIDWAY_AUTH") != "1":
+        return ""
+    return request.headers.get("X-Amzn-Oidc-Identity", "").strip().lower()
 
-    The token comes from the ``token`` query parameter (capability URL),
-    so leaders without app accounts can use the form via a shared link.
-    Only the nomination form routes use this — everything else stays
-    session-only.
+
+def _viewer_alias() -> str:
+    """Who is using the form: app session first, else the ALB identity."""
+    user = session.get("user")
+    if user and user.get("username"):
+        return str(user["username"]).strip().lower()
+    return _midway_header_alias()
+
+
+def login_or_share_token(f):
+    """Allow a session, a valid share token, or an ALB Midway identity.
+
+    Behind the Midway ALB every visitor is authenticated even without an
+    app account, so the form accepts the ALB-asserted identity directly.
+    Share tokens remain as org-locked capability links. Everything else
+    in the app stays session-only.
     """
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         if "user" not in session:
-            # Midway-mode: the ALB already authenticated this person;
-            # establish their session like login_required does.
+            # Provisioned app users get their role-bearing session.
             from app.nps.auth_routes import _try_midway_auth
             _try_midway_auth()
-        if "user" in session:
-            g.share_org_id = None  # session auth: no org restriction
-            return f(*args, **kwargs)
-        share_org = nps_share_link_service.resolve_token(request.args.get("token", ""))
-        if share_org:
-            g.share_org_id = share_org  # token auth: locked to this org
-            return f(*args, **kwargs)
-        if request.is_json or request.headers.get("Accept") == "application/json":
-            return jsonify({"error": "Authentication required"}), 401
-        return redirect(url_for("auth.login_page"))
+        g.share_org_id = None
+        if "user" not in session:
+            share_org = nps_share_link_service.resolve_token(request.args.get("token", ""))
+            if share_org:
+                g.share_org_id = share_org  # token: locked to this org
+            elif not _midway_header_alias():
+                if request.is_json or request.headers.get("Accept") == "application/json":
+                    return jsonify({"error": "Authentication required"}), 401
+                return redirect(url_for("auth.login_page"))
+        g.viewer_alias = _viewer_alias()
+        return f(*args, **kwargs)
 
     return wrapper
 
@@ -324,6 +340,19 @@ def _share_org_mismatch(org_id: str):
     if share_org and org_id != share_org:
         return jsonify({"error": "This link is limited to one org"}), 403
     return None
+
+
+def _is_privileged_for_org(org_id: str) -> bool:
+    """Full visibility: admins/editors, or roster leaders of this org."""
+    if session.get("user", {}).get("role") in ("admin", "editor"):
+        return True
+    viewer = getattr(g, "viewer_alias", "") or ""
+    if not viewer:
+        return False
+    return any(
+        leader["alias"] == viewer
+        for leader in nps_leader_service.list_leaders(org_id)
+    )
 
 
 @nps_bp.route("/leaders", methods=["GET"])
@@ -458,7 +487,18 @@ def nominate_context():
                     else None
                 ),
             })
-        payload = {"orgs": orgs, "locked_org": share_org}
+        viewer = getattr(g, "viewer_alias", "") or ""
+        payload = {
+            "orgs": orgs,
+            "locked_org": share_org,
+            "viewer": {
+                "alias": viewer,
+                # Per-org full-visibility flag (admin/editor/roster leader).
+                "privileged_orgs": {
+                    o["org_id"]: _is_privileged_for_org(o["org_id"]) for o in orgs
+                },
+            },
+        }
         # Admins/editors get per-org shareable capability URLs so they can
         # send each org's leaders their own link (no login needed).
         if session.get("user", {}).get("role") in ("admin", "editor"):
@@ -485,6 +525,11 @@ def nominate_list():
         mismatch = _share_org_mismatch(org_id)
         if mismatch:
             return mismatch
+        if not _is_privileged_for_org(org_id):
+            # Nomination lists are visible only to admins/editors and the
+            # org's roster leaders; regular nominators learn about existing
+            # rows only through the duplicate-conflict response on submit.
+            return jsonify({"error": "Nomination lists are visible to admins and org leaders only"}), 403
         cycle = nps_cycle_service.get_active_cycle(org_id)
         if not cycle:
             return jsonify({"error": f"No active cycle for org '{org_id}'"}), 404
@@ -526,13 +571,34 @@ def nominate_submit():
         if not cycle:
             return jsonify({"error": "No active survey cycle for this org"}), 400
 
+        # Identity comes from the session/ALB, never from the client body —
+        # the nominator cannot be spoofed.
+        nominator = getattr(g, "viewer_alias", "") or ""
+        if not nominator:
+            return jsonify({"error": "Could not establish your identity"}), 401
+
+        # Regular users: the leader is system-resolved from their org
+        # records / manager chain. Admins, editors, and roster leaders may
+        # pick a leader explicitly (nominating on someone's behalf).
+        leader = ""
+        if _is_privileged_for_org(org_id):
+            leader = data.get("leader", "")
+        if not leader:
+            person = nps_nomination_service.lookup_person(org_id, nominator)
+            leader = (person or {}).get("leader", "")
+        if not leader:
+            return jsonify({
+                "error": "Could not determine your leader for this org — "
+                         "ask an org admin to add you or your leader to the roster"
+            }), 400
+
         nomination = nps_nomination_service.nominate_stakeholder(
             org_id=org_id,
             cycle_id=cycle.cycle_id,
             stakeholder_alias=data.get("stakeholder_alias", ""),
             name=data.get("name", ""),
-            leader=data.get("leader", ""),
-            nominated_by=data.get("nominated_by", ""),
+            leader=leader,
+            nominated_by=nominator,
             designation=data.get("designation", ""),
         )
         return jsonify(vars(nomination)), 201
@@ -575,7 +641,8 @@ def nominate_remove():
             cycle_id=cycle.cycle_id,
             stakeholder_alias=data.get("stakeholder_alias", ""),
             leader=data.get("leader", ""),
-            requested_by=data.get("requested_by", ""),
+            # Identity from session/ALB — not spoofable via the body.
+            requested_by=getattr(g, "viewer_alias", "") or "",
             is_privileged=role in ("admin", "editor"),
         )
         return jsonify({"status": "removed"})

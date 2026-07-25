@@ -16,12 +16,17 @@
       </div>
     </div>
     <p class="text-muted mb-3">
-      Select your leader (or your own name if you are the leader), then add the
-      stakeholders you'd like to receive the NPS survey. One stakeholder can only
-      be nominated once per leader — first come, first served.
+      Add the stakeholders you'd like to receive the NPS survey. Your identity
+      and leader are detected automatically. One stakeholder can only be
+      nominated once per leader — first come, first served.
     </p>
 
     <div id="alert-area"></div>
+
+    <div class="alert alert-light border py-2" id="viewer-banner">
+      Nominating as <strong id="viewer-name">…</strong>
+      <span id="viewer-leader-info"></span>
+    </div>
 
     <div class="card mb-3">
       <div class="card-body">
@@ -32,17 +37,14 @@
             <div id="org-locked" class="form-control-plaintext fw-semibold d-none"></div>
             <div id="cycle-info" class="form-text"></div>
           </div>
-          <div class="col-md-6">
+          <div class="col-md-6" id="leader-block">
             <label class="form-label">Leader <span class="text-danger">*</span></label>
             <select id="leader-select" class="form-select">
               <option value="">-- select leader --</option>
             </select>
+            <div class="form-text">Visible to admins and org leaders only.</div>
           </div>
-          <div class="col-md-6">
-            <label class="form-label">Your alias (nominator) <span class="text-danger">*</span></label>
-            <input id="nominator-alias" class="form-control" placeholder="e.g. kumruxl" autocomplete="off">
-            <div id="nominator-hint" class="form-text"></div>
-          </div>
+          <input type="hidden" id="nominator-alias" value="">
           <div class="col-md-6">
             <label class="form-label">Stakeholder alias <span class="text-danger">*</span></label>
             <input id="stakeholder-alias" class="form-control" placeholder="e.g. jdoe" autocomplete="off">
@@ -61,7 +63,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card d-none" id="nominations-card">
       <div class="card-header py-2">
         <strong>Current nominations under <span id="table-leader-name">selected leader</span></strong>
       </div>
@@ -155,6 +157,11 @@ function showAlert(kind, msg) {
 function aliasOf(email) { return (email || '').split('@')[0]; }
 
 let sharePaths = {};  // org_id -> capability path (admins/editors only)
+let viewer = { alias: '', privileged_orgs: {} };
+
+function isPrivileged() {
+  return !!viewer.privileged_orgs[orgSelect.value];
+}
 
 function populateLeaders() {
   const org = activeOrg();
@@ -164,10 +171,37 @@ function populateLeaders() {
   leaderAliases = Object.fromEntries(leaders.map(l => [l.name, l.alias]));
 }
 
+function applyPrivilegeUI() {
+  // Regular nominators: no leader picker, no nominations table — the
+  // system resolves their leader and duplicates surface only on submit.
+  const priv = isPrivileged();
+  document.getElementById('leader-block').classList.toggle('d-none', !priv);
+  document.getElementById('nominations-card').classList.toggle('d-none', !priv);
+}
+
+async function loadViewer() {
+  // Resolve the viewer's own name + leader for the selected org.
+  document.getElementById('nominator-alias').value = viewer.alias;
+  const nameEl = document.getElementById('viewer-name');
+  const leaderInfo = document.getElementById('viewer-leader-info');
+  nameEl.textContent = viewer.alias || 'unknown';
+  leaderInfo.textContent = '';
+  if (!viewer.alias || !orgSelect.value) return;
+  const p = await prefillFor(viewer.alias);
+  if (p && p.name) nameEl.textContent = `${p.name} (${viewer.alias})`;
+  if (p && p.leader) {
+    leaderInfo.innerHTML = ` — your leader: <strong>${p.leader}</strong>`;
+    if (!isPrivileged()) leaderSelect.value = p.leader;
+  } else if (!isPrivileged()) {
+    leaderInfo.innerHTML = ' — <span class="text-danger">no leader could be resolved for this org; contact an admin</span>';
+  }
+}
+
 async function loadContext() {
   const res = await fetch(withToken('/nps/nominate/context'));
   const data = await res.json();
   sharePaths = data.share_paths || {};
+  viewer = data.viewer || { alias: '', privileged_orgs: {} };
   if (Object.keys(sharePaths).length) {
     const btn = document.getElementById('share-btn');
     btn.classList.remove('d-none');
@@ -198,7 +232,9 @@ async function loadContext() {
     lockedEl.classList.remove('d-none');
   }
   populateLeaders();
+  applyPrivilegeUI();
   updateCycleInfo();
+  loadViewer();
 }
 
 // ── Alias-driven prefill ─────────────────────────────────────────
@@ -209,25 +245,6 @@ async function prefillFor(alias) {
   if (!res.ok) return null;
   const data = await res.json();
   return data.found ? data : null;
-}
-
-async function onNominatorBlur() {
-  const alias = document.getElementById('nominator-alias').value.trim();
-  const hint = document.getElementById('nominator-hint');
-  hint.textContent = '';
-  if (!alias) return;
-  const p = await prefillFor(alias);
-  if (p && p.leader && leaderAliases[p.leader] !== undefined) {
-    leaderSelect.value = p.leader;
-    hint.textContent = p.is_leader
-      ? `You're on the leader roster — leader set to you.`
-      : `Leader auto-set to ${p.leader} (from org records).`;
-    refreshTable();
-  } else if (p) {
-    hint.textContent = `Found ${p.name || alias}, but no leader could be auto-selected for this org — pick your leader manually.`;
-  } else {
-    hint.textContent = 'Alias not found in the directory or org records — pick your leader manually.';
-  }
 }
 
 // Remember what WE prefilled, so a new alias lookup can safely replace
@@ -273,6 +290,7 @@ function updateCycleInfo() {
 }
 
 async function refreshTable() {
+  if (!isPrivileged()) return;  // list API rejects non-privileged anyway
   const leader = leaderSelect.value;
   const body = document.getElementById('nominations-body');
   document.getElementById('table-leader-name').textContent = leader || 'selected leader';
@@ -291,10 +309,9 @@ async function refreshTable() {
 }
 
 function canRemove(row) {
-  // The Remove option only appears for rows you own: you are the nominator,
-  // or you are the leader this list belongs to (matched by roster alias).
-  // Admins manage everything else from the Nominations admin page.
-  const me = document.getElementById('nominator-alias').value.trim().toLowerCase();
+  // Remove appears for rows you own: you are the nominator, or the leader
+  // this list belongs to. (Only privileged viewers see this table at all.)
+  const me = (viewer.alias || '').toLowerCase();
   if (!me) return false;
   if (row.nominated_by && row.nominated_by.toLowerCase() === me) return true;
   return (leaderAliases[leaderSelect.value] || '') === me;
@@ -321,15 +338,18 @@ function renderRows() {
 async function submitNomination() {
   const payload = {
     org_id: orgSelect.value,
-    leader: leaderSelect.value,
-    nominated_by: document.getElementById('nominator-alias').value.trim(),
     stakeholder_alias: document.getElementById('stakeholder-alias').value.trim(),
     name: document.getElementById('stakeholder-name').value.trim(),
     designation: document.getElementById('stakeholder-designation').value.trim(),
   };
-  if (!payload.leader) { showAlert('warning', 'Please select a leader.'); return; }
-  if (!payload.nominated_by || !payload.stakeholder_alias || !payload.name) {
-    showAlert('warning', 'Your alias, stakeholder alias, and stakeholder name are required.');
+  // Only privileged viewers can pick the leader; everyone else gets the
+  // server-resolved leader (identity comes from Midway server-side).
+  if (isPrivileged()) {
+    payload.leader = leaderSelect.value;
+    if (!payload.leader) { showAlert('warning', 'Please select a leader.'); return; }
+  }
+  if (!payload.stakeholder_alias || !payload.name) {
+    showAlert('warning', 'Stakeholder alias and stakeholder name are required.');
     return;
   }
   const res = await fetch(withToken('/nps/nominate/submit'), {
@@ -339,7 +359,7 @@ async function submitNomination() {
   });
   const data = await res.json();
   if (res.status === 201) {
-    showAlert('success', `Nominated <strong>${payload.name}</strong> under ${payload.leader}.`);
+    showAlert('success', `Nominated <strong>${payload.name}</strong> under ${data.leader}.`);
     ['stakeholder-alias', 'stakeholder-name', 'stakeholder-designation'].forEach(id => document.getElementById(id).value = '');
     refreshTable();
   } else if (res.status === 409 && data.duplicate) {
@@ -357,11 +377,6 @@ async function submitNomination() {
 }
 
 async function removeNomination(stakeholderAlias) {
-  const requestedBy = document.getElementById('nominator-alias').value.trim();
-  if (!requestedBy) {
-    showAlert('warning', 'Enter your alias (nominator field) first — removal is limited to the nominator, the leader, or an admin.');
-    return;
-  }
   if (!confirm(`Remove ${stakeholderAlias} from ${leaderSelect.value}'s nominations?`)) return;
   const res = await fetch(withToken('/nps/nominate/remove'), {
     method: 'POST',
@@ -370,7 +385,6 @@ async function removeNomination(stakeholderAlias) {
       org_id: orgSelect.value,
       leader: leaderSelect.value,
       stakeholder_alias: stakeholderAlias,
-      requested_by: requestedBy,
     }),
   });
   const data = await res.json();
@@ -399,10 +413,8 @@ async function sendInvite() {
   }
 }
 
-orgSelect.addEventListener('change', () => { populateLeaders(); updateCycleInfo(); refreshTable(); });
+orgSelect.addEventListener('change', () => { populateLeaders(); applyPrivilegeUI(); updateCycleInfo(); refreshTable(); loadViewer(); });
 leaderSelect.addEventListener('change', refreshTable);
-document.getElementById('nominator-alias').addEventListener('input', renderRows);
-document.getElementById('nominator-alias').addEventListener('blur', onNominatorBlur);
 document.getElementById('stakeholder-alias').addEventListener('blur', onStakeholderBlur);
 document.getElementById('invite-send-btn').addEventListener('click', sendInvite);
 document.getElementById('submit-btn').addEventListener('click', submitNomination);
