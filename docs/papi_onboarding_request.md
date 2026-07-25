@@ -83,9 +83,21 @@ themselves. Works identically for any org once its roster is entered.
 - [ ] ERB scoping questionnaire (SIM 40fc8061-b0c4-421b-8c4c-c6e3a912a923,
       tag @souzaja) — deployment is IN/US/CA only (non-ERB), expect out
       of scope; 5-6 week clock, non-blocking for current launch.
-- [ ] Review and submit in UBX → onboarding SIM → IAM role ARNs
-- [ ] Role ARN received, env set on EC2, AllowAssumePapiRole attached
-- [x] papi_client.py + leader-chain walk + tests (code-complete, gated)
-- [ ] Switch client to supervisorChainLogin single-call resolution
-- [ ] DI threat model updated + published
+- [x] UBX submitted → auto-onboarded SAME DAY (gamma + prod). SIM
+      V2300729875 (resolved) has the role ARNs. Allowlisted op:
+      employeeV2ByLogin; account 399016860083.
+- [x] **LIVE IN PROD (2026-07-25)**: AllowAssumePapiRole attached;
+      env PAPI_ROLE_ARN=arn:aws:iam::220627861680:role/
+      IAMAuth_nps_survey_us-east-1, PAPI_ENDPOINT=
+      https://us-east-1.prod.papi.people-data.amazon.dev (IAM-auth
+      regional URL — papi.amazon.com is CORP/CloudAuth only).
+      Gotchas fixed: SigV4 query pre-encoding; valid expand option is
+      `supervisor-chain` (full upward chain in one call — client scans
+      it, no hop-walking). Verified live: kumruxl/kuvinu resolve
+      name+title, source=papi.
+- [x] papi_client.py + single-call chain resolution + tests (370 green)
+- [ ] Leader rosters per org (ONLY remaining blocker for leader
+      auto-select — chain data verified flowing)
+- [ ] ERB questionnaire (SIM 40fc8061, non-blocking for IN/NA launch)
+- [ ] DI threat model updated + published (add PAPI internal boundary)
 - [ ] Kale description updated (add PAPI as data source)
