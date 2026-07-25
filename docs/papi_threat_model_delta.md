@@ -157,6 +157,51 @@ threats needing **"Add a custom mitigation"** (not N/A). Verbatim text:
   Confidential; PAPI data element = employee directory record
   (name/title/supervisor-chain), in-transit/transient, not stored.
 
+## Two-page note (DI diagram structure)
+
+The DI diagram has TWO pages:
+- **Architecture** = presentation/visual page (unmodeled boxes, for humans).
+- **Page-1** = the MODELED page (real stencils, data elements, threats).
+  All threat/finding marking that matters happens here.
+
+Keep both visually consistent (PAPI + ALB on each), but only Page-1's
+components carry the DI threat/finding state.
+
+## ALB / Midway edge component — threat mitigations (Page-1)
+
+Adding the internet-facing ALB (authenticate-oidc / Federate-Midway)
+generates these; mark each Mitigated with:
+
+- **Missing Encryption in Transit**:
+  > ALB HTTPS listener terminates TLS 1.2+ with an ACM cert
+  > (nps.whs-cpt.amazon.dev); HTTP:80 redirects to HTTPS; backend :5000
+  > is reachable only from the ALB security group.
+- **Missing Authentication**:
+  > Listener runs authenticate-oidc against Amazon Federate (Midway);
+  > every request is authenticated at the edge, unauthenticated users
+  > bounce to Midway login. App trusts the ALB-injected
+  > X-Amzn-Oidc-Identity header (instance SG admits the ALB only, so it
+  > cannot be spoofed) and maps alias->role from its user store.
+- **Insufficient access control**:
+  > Post-auth the app enforces role-based access (admin/editor/viewer)
+  > server-side; nominator/leader identity comes from the Midway header
+  > and the leader is system-resolved, never client-chosen. Public
+  > 80/443/22 revoked; shell via SSM only.
+- **Availability / DoS**:
+  > AWS-managed, multi-AZ, elastic ALB behind AWS Shield Standard; app is
+  > non-tier-1 and degrades gracefully (Asana form stays up if app down).
+- **Error Message Information Disclosure**:
+  > App returns generic error pages; backend stack traces are not exposed
+  > via the ALB; health checks hit the unauthenticated /health endpoint
+  > returning only liveness.
+
+ALB findings: Description = ALB inner-box text; auth = OIDC / Amazon
+Federate (use "Other" if no OIDC option); data-in-transit = HTTPS;
+data-at-rest = N/A; data handling = attach an identity element (User
+Aliases / Employee directory record). This edge is where the
+identity-driven-form control (leader auto-resolution from the Midway
+header) is represented.
+
 ## Not changed (confirm, don't re-open)
 
 - ASR profiling answers: **no change** — PAPI is 1P internal; third-party
