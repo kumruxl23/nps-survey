@@ -119,6 +119,44 @@ No new Kale data OBJECT is required (nothing new is stored). If Kale asks
 "where does this field originate," the source for name/title/leader is
 now PeopleAPIService (PAPI) in addition to the existing sources.
 
+## DI-generated PAPI threats (component cLDsFGbr4xdM83TXGDsaF-71, "Amazon API Gateway API") — exact mapping
+
+DI modeled the PAPI box as an API Gateway stencil, so it generated 5 High
+threats needing **"Add a custom mitigation"** (not N/A). Verbatim text:
+
+1. **Availability** (denial-of-service):
+   > PAPI is a first-party, PeopleData/AWS-managed service consumed as a
+   > client; availability/throttling/scaling are owned by the PAPI team.
+   > We call one allowlisted op (employeeV2ByLogin) at TPS 10 and degrade
+   > gracefully — if PAPI is slow or down, the form silently falls back to
+   > nomination-history prefill, so our availability is unaffected.
+2. **Missing Encryption in Transit** (encrypt-in-transit):
+   > HTTPS/TLS to the fixed regional endpoint
+   > (us-east-1.prod.papi.people-data.amazon.dev), SigV4-signed
+   > (service=execute-api) with STS creds from the cross-account IAM-auth
+   > role. No unencrypted path.
+3. **Error Message Information Disclosure** (error-disclosure):
+   > papi_client catches non-200s as PapiError; the form shows a generic
+   > fallback and never surfaces raw PAPI error bodies to users. PAPI error
+   > content is not logged.
+4. **Insufficient access control**:
+   > IAM-auth only. The EC2 role may assume ONLY the specific PAPI role
+   > ARNs (AllowAssumePapiRole); the assumed role is allowlisted by PAPI to
+   > employeeV2ByLogin at TPS 10. No public path; no stored API key.
+5. **Missing Authentication**:
+   > Every request is authenticated: STS AssumeRole into the PAPI
+   > cross-account IAM-auth role, then SigV4 signing. PAPI rejects
+   > unsigned/unauthorized calls; no anonymous access.
+
+**5 Quality findings** — fill metadata on the PAPI component:
+- Description: "Internal Amazon People API (employeeV2ByLogin,
+  expand=supervisor-chain), consumed via IAM auth + SigV4 to resolve alias
+  -> name/title/supervisor-chain for prefill; response transient, not stored."
+- Security properties: auth = IAM / SigV4; transport = TLS/HTTPS.
+- Data handling (PAPI, EC2, Internal Amazon User): classification
+  Confidential; PAPI data element = employee directory record
+  (name/title/supervisor-chain), in-transit/transient, not stored.
+
 ## Not changed (confirm, don't re-open)
 
 - ASR profiling answers: **no change** — PAPI is 1P internal; third-party
