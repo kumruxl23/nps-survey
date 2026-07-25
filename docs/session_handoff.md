@@ -24,13 +24,17 @@ GitFarm mainline, CR pending (top priority)**.
    (origin/main → 36bce1a). `main` now contains all of mainline
    (24 ahead, 0 behind). Runbook + CR description saved:
    `docs/cr_h2_features.md`, `docs/cr_h2_features_description.md`.
-2. TODO on dev desktop (`dev-dsk-kumruxl-2b-74d03bb8`): checkout
-   `origin/h2-features` → `brazil-build release` → `cr
-   --destination-branch mainline` (follow docs/cr_h2_features.md). ONE
-   consolidated CR themed: Midway auto-login + /health; org-scoped share
-   links + prefill; PAPI client (supervisor-chain); identity-driven form
-   + privileged-only visibility. Reviewer: Riwjit (confirm alias; Vinay
-   pending source access confirmation).
+2. DONE 2026-07-25 (driven over SSH to dev desktop): checked out
+   `origin/h2-features`, `brazil-build release` GREEN (379 tests, CPython
+   3.10 + 3.12), raised **CR-292011675** vs mainline (`--parent mainline`,
+   25 commits). Analyzers: InclusiveTechScanner + Software Assurance PASS;
+   AutoSDE / Dry Run Build (7948533591) / Security Scanner running; rest
+   blocked on dry-run. NO individual reviewer yet (CRUX team rule attached,
+   1 approval required) — add Riwjit (alias TBD); Vinay pending source
+   access. NOTE: commits authored under GitHub noreply email → CRUX
+   "author mismatch" WARNING only (non-blocking; not rewriting pushed
+   history). Description doc had to be de-unicoded (cr CLI chokes on
+   →/—); commit 72283c8/408925a.
 3. **Phase 3 Apollo deploy stages** on pipeline
    NPSSurveyAutomation-release (currently build-only, no deploy) — after
    this exists, retire `infra/ssm_deploy.py` (deploys then flow
