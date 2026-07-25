@@ -100,4 +100,7 @@ themselves. Works identically for any org once its roster is entered.
       auto-select — chain data verified flowing)
 - [ ] ERB questionnaire (SIM 40fc8061, non-blocking for IN/NA launch)
 - [ ] DI threat model updated + published (add PAPI internal boundary)
-- [ ] Kale description updated (add PAPI as data source)
+      — copy/paste kit ready in `docs/papi_threat_model_delta.md`; drawio
+      already updated with the PAPI internal boundary + flow.
+- [ ] Kale description updated (add PAPI as data source) — wording drafted
+      in `docs/papi_threat_model_delta.md` (no new stored data object).

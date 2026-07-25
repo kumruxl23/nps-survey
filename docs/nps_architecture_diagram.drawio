@@ -81,6 +81,14 @@
           <mxGeometry x="85" y="400" width="230" height="90" as="geometry" />
         </mxCell>
 
+        <!-- Trust Boundary: PAPI People API (internal Amazon service, separate account) — NOT 3rd party -->
+        <mxCell id="papi-zone" value="PAPI People API (internal Amazon service, acct 220627861680)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=12;fontStyle=1;verticalAlign=top" vertex="1" parent="1">
+          <mxGeometry x="60" y="530" width="280" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="papi" value="PAPI employeeV2ByLogin&#10;(IAM Auth, SigV4 execute-api)&#10;name / title / supervisor-chain&#10;used transiently — nothing stored" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=11" vertex="1" parent="1">
+          <mxGeometry x="85" y="570" width="230" height="95" as="geometry" />
+        </mxCell>
+
         <!-- Edges -->
         <mxCell id="e1" value="HTTPS / Midway login&#10;(Federate OIDC at ALB)" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=10" edge="1" parent="1" source="user" target="alb">
           <mxGeometry relative="1" as="geometry" />
@@ -115,6 +123,10 @@
         </mxCell>
 
         <mxCell id="e10" value="HTTPS / SigV4a + x-api-key&#10;alias in / Slack user ID out (internal)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="slab">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e11" value="HTTPS / STS AssumeRole + SigV4 (execute-api)&#10;alias in / name+title+supervisor-chain in&#10;(transient prefill — not persisted)" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="ec2" target="papi">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
