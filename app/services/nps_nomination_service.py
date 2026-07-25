@@ -310,8 +310,12 @@ def remove_leader_nomination(
 
     allowed = is_privileged or (requester and requester == nomination.nominated_by)
     if not allowed and requester:
+        # Scope the roster lookup to THIS org — otherwise a leader with the
+        # same display name in another org could satisfy the check and remove
+        # a nomination here (cross-org authorization gap). org_id is always
+        # in scope; every other call site is already org-scoped.
         leader_entry = next(
-            (l for l in nps_leader_service.list_leaders() if l["name"] == leader),
+            (l for l in nps_leader_service.list_leaders(org_id) if l["name"] == leader),
             None,
         )
         allowed = leader_entry is not None and leader_entry["alias"] == requester
