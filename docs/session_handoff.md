@@ -17,16 +17,20 @@ Suite: **379 tests green**. Prod runs from laptop `main` via
 `infra/ssm_deploy.py` (SSM chunked deploy) — **~24 commits ahead of
 GitFarm mainline, CR pending (top priority)**.
 
-### PENDING — CR / pipeline (top priority, needs VPN)
-1. GitFarm unreachable from laptop without VPN (`git.amazon.com` does
-   not resolve; fix = VPN + `mwinit -o`). Then:
-   `git push internal main:h2-features`
-2. On dev desktop (`dev-dsk-kumruxl-2b-74d03bb8`): pull branch into
-   workspace → `brazil-build release` → `cr --destination-branch
-   mainline`. ONE consolidated CR themed: Midway auto-login + /health;
-   org-scoped share links + prefill; PAPI client (supervisor-chain);
-   identity-driven form + privileged-only visibility. Reviewer: Riwjit
-   (Vinay pending source access confirmation).
+### PENDING — CR / pipeline (top priority)
+1. DONE 2026-07-25 (laptop): merged `internal/mainline` (BrazilPython
+   conversion `7e4c9d8`) into `main` cleanly; pushed feature branch
+   `main:h2-features` to GitFarm; GitHub mirror fast-forwarded
+   (origin/main → 36bce1a). `main` now contains all of mainline
+   (24 ahead, 0 behind). Runbook + CR description saved:
+   `docs/cr_h2_features.md`, `docs/cr_h2_features_description.md`.
+2. TODO on dev desktop (`dev-dsk-kumruxl-2b-74d03bb8`): checkout
+   `origin/h2-features` → `brazil-build release` → `cr
+   --destination-branch mainline` (follow docs/cr_h2_features.md). ONE
+   consolidated CR themed: Midway auto-login + /health; org-scoped share
+   links + prefill; PAPI client (supervisor-chain); identity-driven form
+   + privileged-only visibility. Reviewer: Riwjit (confirm alias; Vinay
+   pending source access confirmation).
 3. **Phase 3 Apollo deploy stages** on pipeline
    NPSSurveyAutomation-release (currently build-only, no deploy) — after
    this exists, retire `infra/ssm_deploy.py` (deploys then flow
