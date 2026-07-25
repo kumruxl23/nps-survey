@@ -71,8 +71,21 @@ themselves. Works identically for any org once its roster is entered.
 
 ## Status
 
-- [ ] UBX onboarding submitted (kumruxl)
-- [ ] Role ARN received, env set on EC2, policy attached
+- [x] UBX intake completed (2026-07-25): attributes trimmed to Public-only
+      set (login, preferredName, workEmail, jobTitle, supervisorChainLogin,
+      reportingChainInformation); endpoint employeeV2ByLogin only; IAM
+      auth, client `nps_survey`, account 399016860083 (gamma+prod),
+      TPS 10. Data dictionary completed in catalog.hcm-data.amazon.dev
+      (6 rows, sources = PeopleAPIService; slack_user_id row moved to
+      Kale-only — SLAB not in FPDS source catalog).
+- [x] **Privacy review: GREEN LIGHT** (no DPIA; auto-approved except ERB
+      countries). SIM 65afe819-3c61-460c-a051-2f577949870f.
+- [ ] ERB scoping questionnaire (SIM 40fc8061-b0c4-421b-8c4c-c6e3a912a923,
+      tag @souzaja) — deployment is IN/US/CA only (non-ERB), expect out
+      of scope; 5-6 week clock, non-blocking for current launch.
+- [ ] Review and submit in UBX → onboarding SIM → IAM role ARNs
+- [ ] Role ARN received, env set on EC2, AllowAssumePapiRole attached
 - [x] papi_client.py + leader-chain walk + tests (code-complete, gated)
+- [ ] Switch client to supervisorChainLogin single-call resolution
 - [ ] DI threat model updated + published
-- [ ] Kale description updated
+- [ ] Kale description updated (add PAPI as data source)
