@@ -2,7 +2,107 @@
 
 Paste-ready context to resume in a new chat.
 
-## UPDATE 2026-07-19 (supersedes items below)
+## ⭐ MASTER UPDATE 2026-07-25 (supersedes EVERYTHING below — start here)
+
+### Current state, one paragraph
+App is LIVE at **https://nps.whs-cpt.amazon.dev** behind a Midway-gated
+ALB (Federate OIDC client `nps-survey-reminders-prod`). ASR review is
+officially **Yellow / Ring-2 / self-certifiable**. Kale privacy
+attestation SUBMITTED (In Review). PAPI directory integration is LIVE
+in prod (any Amazon alias → name/title/leader prefill on the nomination
+form). Nomination form is fully identity-driven: nominator + leader
+come from Midway/server-side; leader is NEVER user-selectable;
+nomination lists visible only to admins/editors/roster leaders.
+Suite: **379 tests green**. Prod runs from laptop `main` via
+`infra/ssm_deploy.py` (SSM chunked deploy) — **~24 commits ahead of
+GitFarm mainline, CR pending (top priority)**.
+
+### PENDING — CR / pipeline (top priority, needs VPN)
+1. GitFarm unreachable from laptop without VPN (`git.amazon.com` does
+   not resolve; fix = VPN + `mwinit -o`). Then:
+   `git push internal main:h2-features`
+2. On dev desktop (`dev-dsk-kumruxl-2b-74d03bb8`): pull branch into
+   workspace → `brazil-build release` → `cr --destination-branch
+   mainline`. ONE consolidated CR themed: Midway auto-login + /health;
+   org-scoped share links + prefill; PAPI client (supervisor-chain);
+   identity-driven form + privileged-only visibility. Reviewer: Riwjit
+   (Vinay pending source access confirmation).
+3. **Phase 3 Apollo deploy stages** on pipeline
+   NPSSurveyAutomation-release (currently build-only, no deploy) — after
+   this exists, retire `infra/ssm_deploy.py` (deploys then flow
+   CR → pipeline → Apollo). SLAB Option A SDK swap also rides on this.
+
+### PENDING — ASR / DI threat model / Kale
+1. **DI threat model**: add PAPI as an internal-service boundary (same
+   pattern as OPUS SLAB in v449) + transient data element "employee
+   directory record (name/title/supervisor chain)". Also reflect the
+   identity-driven form (leader auto-resolution). Re-run scan, publish
+   new version, attach export to ASR Threat Model task. Current
+   published = v449 (0 unmitigated / 28 mitigated / 1 FP).
+2. **Kale**: add PAPI as a data source in the app description (Veritas
+   33d9f777-6675-4612-bf3e-640960c021ad); review is In Review with
+   kale-wrkplace-hlth-safety — NUDGE via Smruthi thread P441140532 if
+   quiet >5 business days. Kale financial review branch (Tax/
+   Accounting) = false-positive trigger, answer "no financial data",
+   non-blocking.
+3. **ASR critical path**: Kale approval → Privacy Compliance task
+   auto-completes → Resolve Required Issues → SELF-certify (Yellow needs
+   no external certifier — Sri confirmed; he's informed). Then paste
+   engagement ARN into Slack install request → AmazonUC-SIGNAL unblocks.
+4. ERB scoping questionnaire (SIM 40fc8061-...) — fill + upload + tag
+   @souzaja. Deployment is IN/US/CA (non-ERB) → expect out-of-scope;
+   5-6 week clock, non-blocking.
+5. Data Dictionary Review SIM HRPRP-58884: "Out of Scope/No Data"
+   comment posted (survey-tool criterion); change workflow step to
+   Specialist Review if editable; non-blocking either way.
+
+### PENDING — PAPI (integration is LIVE; loose ends)
+1. **NA + FEC leader rosters empty** — leader auto-resolution only works
+   for WHS CPT IN (6 Sandeep-directs loaded: bhanidhi, nehrwt, nsbhatia,
+   prsaab, raabhas, royindr). NA workbook has 18 PoC names, FEC 30 —
+   names only, NO aliases. Either kumruxl supplies aliases, or UBX
+   re-submit to add `employeeSearchV2AutoCompleteLogin` (name→alias).
+   Also confirm NA/FEC "PoCs" are truly the sponsor-directs equivalent.
+2. PAPI config (for reference): role
+   arn:aws:iam::220627861680:role/IAMAuth_nps_survey_us-east-1, endpoint
+   https://us-east-1.prod.papi.people-data.amazon.dev (IAM-auth regional
+   URL — papi.amazon.com is CORP-only), expand=`supervisor-chain` (full
+   upward chain in one call), SigV4 with pre-encoded query. Gamma roles
+   also issued (671313004605). Op allowlisted: employeeV2ByLogin only.
+   TPS 10. Onboarding SIM V2300729875 (resolved).
+3. Privacy: GREEN LIGHT (no DPIA), auto-approved except ERB countries.
+
+### PENDING — smaller items
+- go/nps-survey shortlink → https://nps.whs-cpt.amazon.dev/nps/dashboard
+- Rotate Federate OIDC client secret (passed through chat during setup);
+  update ALB listener + Secrets Manager `nps-survey/federate-oidc`
+- Deactivate legacy `__user__admin` password user after browser
+  verification (Midway auto-login confirmed working)
+- SLAB API key rotation (shared in plaintext in ticket D490668297)
+- Leaders roster admin UI (currently API-only: POST /nps/leaders/add
+  {alias, name, org_id})
+- Old parked: orphan ASR app 556dfa31 cleanup, CTI confirmation with
+  manager, close CAZ ticket P449029619, kuvinu backup PAT (P426628259)
+
+### Architecture quick-reference (as deployed today)
+- User → ALB (Midway/Federate OIDC, cert nps.whs-cpt.amazon.dev) → EC2
+  i-06ccd83e4b55fa98f gunicorn :5000 (SG: ALB-only; shell = SSM only;
+  public 80/443/22 REVOKED; nginx retired)
+- App auth: NPS_MIDWAY_AUTH=1 → X-Amzn-Oidc-Identity header → role from
+  user store (kumruxl + kuvinu = admins, no passwords). Password form
+  disabled in prod, kept for local dev.
+- Nominate form: identity auto-detected; leader system-resolved
+  (roster → PAPI chain → history); lists = privileged only; duplicates
+  surface only via 409 conflict. Per-org share-token links (org-locked
+  server-side).
+- Env (systemd override): NPS_BEHIND_PROXY, NPS_ALLOWED_HOSTS,
+  NPS_MIDWAY_AUTH, PAPI_ROLE_ARN, PAPI_ENDPOINT. Deploy:
+  `python infra/ssm_deploy.py` (fresh ada creds for 399016860083;
+  expire hourly).
+- S3 bucket whs-cpt-nps-survey DELETED (was redundant workbook copies);
+  6 DynamoDB tables (diagram says 6 now).
+
+## UPDATE 2026-07-19 (superseded — historical)
 
 DONE this session:
 - **Pipeline blocker RESOLVED** (was pending action #1). Root cause was
