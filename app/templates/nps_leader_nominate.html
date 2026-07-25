@@ -38,11 +38,11 @@
             <div id="cycle-info" class="form-text"></div>
           </div>
           <div class="col-md-6" id="leader-block">
-            <label class="form-label">Leader <span class="text-danger">*</span></label>
+            <label class="form-label">View nominations under</label>
             <select id="leader-select" class="form-select">
               <option value="">-- select leader --</option>
             </select>
-            <div class="form-text">Visible to admins and org leaders only.</div>
+            <div class="form-text">Viewing filter only (admins and org leaders) — nominations always file under the nominator's own leader.</div>
           </div>
           <input type="hidden" id="nominator-alias" value="">
           <div class="col-md-6">
@@ -156,6 +156,15 @@ function showAlert(kind, msg) {
 
 function aliasOf(email) { return (email || '').split('@')[0]; }
 
+// HTML-escape any server-provided value before interpolating into markup
+// (text or attribute context). Prevents stored XSS from nomination fields
+// like name/designation/nominated_by that other users can set.
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 let sharePaths = {};  // org_id -> capability path (admins/editors only)
 let viewer = { alias: '', privileged_orgs: {} };
 
@@ -190,10 +199,14 @@ async function loadViewer() {
   const p = await prefillFor(viewer.alias);
   if (p && p.name) nameEl.textContent = `${p.name} (${viewer.alias})`;
   if (p && p.leader) {
-    leaderInfo.innerHTML = ` — your leader: <strong>${p.leader}</strong>`;
-    if (!isPrivileged()) leaderSelect.value = p.leader;
-  } else if (!isPrivileged()) {
-    leaderInfo.innerHTML = ' — <span class="text-danger">no leader could be resolved for this org; contact an admin</span>';
+    leaderInfo.innerHTML = ` — your leader: <strong>${p.leader}</strong> (nominations file here)`;
+    // Default the viewing filter to your own list.
+    if (leaderAliases[p.leader] !== undefined && !leaderSelect.value) {
+      leaderSelect.value = p.leader;
+      refreshTable();
+    }
+  } else {
+    leaderInfo.innerHTML = ' — <span class="text-danger">no leader could be resolved for this org; contact an admin before nominating</span>';
   }
 }
 
@@ -212,7 +225,7 @@ async function loadContext() {
       const url = location.origin + path;
       try {
         await navigator.clipboard.writeText(url);
-        showAlert('success', `Share link for <strong>${activeOrg().org_name}</strong> copied — it opens the form locked to this org only (no login needed).`);
+        showAlert('success', `Share link for <strong>${esc(activeOrg().org_name)}</strong> copied — it opens the form locked to this org only (no login needed).`);
       } catch (e) {
         prompt('Copy this link:', url);
       }
@@ -323,16 +336,19 @@ function renderRows() {
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No nominations yet</td></tr>';
     return;
   }
-  body.innerHTML = lastRows.map(r => `
+  body.innerHTML = lastRows.map(r => {
+    const alias = aliasOf(r.email);
+    return `
     <tr>
-      <td class="ps-3">${r.name}</td>
-      <td>${aliasOf(r.email)}</td>
-      <td>${r.designation || '-'}</td>
-      <td>${r.nominated_by || '-'}</td>
+      <td class="ps-3">${esc(r.name)}</td>
+      <td>${esc(alias)}</td>
+      <td>${esc(r.designation) || '-'}</td>
+      <td>${esc(r.nominated_by) || '-'}</td>
       <td class="text-end pe-3">
-        ${canRemove(r) ? `<button class="btn btn-sm btn-outline-danger" onclick="removeNomination('${aliasOf(r.email)}')">Remove</button>` : ''}
+        ${canRemove(r) ? `<button class="btn btn-sm btn-outline-danger" data-remove-alias="${esc(alias)}">Remove</button>` : ''}
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 async function submitNomination() {
@@ -342,12 +358,8 @@ async function submitNomination() {
     name: document.getElementById('stakeholder-name').value.trim(),
     designation: document.getElementById('stakeholder-designation').value.trim(),
   };
-  // Only privileged viewers can pick the leader; everyone else gets the
-  // server-resolved leader (identity comes from Midway server-side).
-  if (isPrivileged()) {
-    payload.leader = leaderSelect.value;
-    if (!payload.leader) { showAlert('warning', 'Please select a leader.'); return; }
-  }
+  // The leader is always resolved server-side from the nominator's own
+  // chain — the dropdown (admins/leaders) is a viewing filter only.
   if (!payload.stakeholder_alias || !payload.name) {
     showAlert('warning', 'Stakeholder alias and stakeholder name are required.');
     return;
@@ -359,15 +371,15 @@ async function submitNomination() {
   });
   const data = await res.json();
   if (res.status === 201) {
-    showAlert('success', `Nominated <strong>${payload.name}</strong> under ${data.leader}.`);
+    showAlert('success', `Nominated <strong>${esc(payload.name)}</strong> under ${esc(data.leader)}.`);
     ['stakeholder-alias', 'stakeholder-name', 'stakeholder-designation'].forEach(id => document.getElementById(id).value = '');
     refreshTable();
   } else if (res.status === 409 && data.duplicate) {
     const e = data.existing || {};
     const when = e.created_at ? ` on ${e.created_at.slice(0, 10)}` : '';
     document.getElementById('dup-modal-body').innerHTML =
-      `<strong>${e.name || payload.stakeholder_alias}</strong> has already been nominated under ` +
-      `<strong>${e.leader}</strong> by <strong>${e.nominated_by || 'someone'}</strong>${when}.<br><br>` +
+      `<strong>${esc(e.name || payload.stakeholder_alias)}</strong> has already been nominated under ` +
+      `<strong>${esc(e.leader)}</strong> by <strong>${esc(e.nominated_by || 'someone')}</strong>${esc(when)}.<br><br>` +
       `Nominations are first come, first served per leader. The same stakeholder can still ` +
       `be nominated under a different leader.`;
     new bootstrap.Modal(document.getElementById('dup-modal')).show();
@@ -418,6 +430,13 @@ leaderSelect.addEventListener('change', refreshTable);
 document.getElementById('stakeholder-alias').addEventListener('blur', onStakeholderBlur);
 document.getElementById('invite-send-btn').addEventListener('click', sendInvite);
 document.getElementById('submit-btn').addEventListener('click', submitNomination);
+// Delegated handler for per-row Remove buttons (replaces inline onclick,
+// which was injectable via the alias). The tbody element persists across
+// renderRows() innerHTML swaps, so one listener is enough.
+document.getElementById('nominations-body').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button[data-remove-alias]');
+  if (btn) removeNomination(btn.getAttribute('data-remove-alias'));
+});
 loadContext();
 </script>
 {% endblock %}
