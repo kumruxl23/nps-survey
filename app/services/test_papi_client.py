@@ -16,7 +16,8 @@ def papi_env(monkeypatch):
 
 
 def _employee_payload(login="jdoe", first="John", last="Doe",
-                      title="Sr. PM", manager="boss1"):
+                      title="Sr. PM", manager="boss1",
+                      chain=("boss1", "direct1")):
     return {
         "basicInfo": {
             "login": login,
@@ -24,7 +25,8 @@ def _employee_payload(login="jdoe", first="John", last="Doe",
             "lastName": last,
             "businessTitle": title,
             "managerLogin": manager,
-        }
+        },
+        "supervisorChain": [{"login": c} for c in chain],
     }
 
 
@@ -50,8 +52,10 @@ class TestGetEmployee:
         assert emp == {
             "login": "jdoe", "name": "John Doe",
             "title": "Sr. PM", "manager_login": "boss1",
+            "chain": ["boss1", "direct1"],
         }
         assert "login:jdoe" in mock_get.call_args[0][0]
+        assert "supervisor-chain" in mock_get.call_args[0][0]
 
     @patch("app.services.papi_client._signed_get")
     def test_unknown_alias_returns_none(self, mock_get):
@@ -64,27 +68,18 @@ class TestGetEmployee:
         with pytest.raises(PapiError, match="HTTP 500"):
             papi_client.get_employee("jdoe")
 
-    @patch("app.services.papi_client._signed_get")
-    def test_manager_login_alternate_shapes(self, mock_get):
-        payload = {"basicInfo": {"login": "jdoe", "firstName": "J", "lastName": "D",
-                                 "businessTitle": "PM"},
-                   "manager": {"login": "BOSS2"}}
-        mock_get.return_value = _mock_response(200, payload)
-        assert papi_client.get_employee("jdoe")["manager_login"] == "boss2"
-
-
 class TestResolveLeaderViaChain:
     @patch("app.services.papi_client.get_employee")
     @patch("app.services.nps_leader_service.list_leaders")
-    def test_walks_chain_to_roster_member(self, mock_leaders, mock_emp):
+    def test_finds_roster_member_in_chain(self, mock_leaders, mock_emp):
         mock_leaders.return_value = [{"alias": "direct1", "name": "Direct One", "org_id": "o"}]
-        # jdoe -> mid1 -> direct1 (on roster)
-        mock_emp.side_effect = [
-            {"login": "jdoe", "name": "J D", "title": "", "manager_login": "mid1"},
-            {"login": "mid1", "name": "M One", "title": "", "manager_login": "direct1"},
-        ]
+        # jdoe's chain: mid1 (hop 1) -> direct1 (hop 2, on roster) -> vp (hop 3)
+        mock_emp.return_value = {"login": "jdoe", "name": "J D", "title": "",
+                                 "manager_login": "mid1",
+                                 "chain": ["mid1", "direct1", "vp"]}
         result = papi_client.resolve_leader_via_chain("o", "jdoe")
         assert result == {"leader_name": "Direct One", "leader_alias": "direct1", "hops": 2}
+        assert mock_emp.call_count == 1  # single PAPI call
 
     @patch("app.services.nps_leader_service.list_leaders")
     def test_roster_leader_resolves_immediately(self, mock_leaders):
@@ -96,8 +91,19 @@ class TestResolveLeaderViaChain:
     @patch("app.services.nps_leader_service.list_leaders")
     def test_chain_never_meets_roster(self, mock_leaders, mock_emp):
         mock_leaders.return_value = [{"alias": "direct1", "name": "Direct One", "org_id": "o"}]
-        mock_emp.return_value = {"login": "x", "name": "X", "title": "", "manager_login": ""}
+        mock_emp.return_value = {"login": "x", "name": "X", "title": "",
+                                 "manager_login": "", "chain": ["a", "b"]}
         assert papi_client.resolve_leader_via_chain("o", "outsider") is None
+
+    @patch("app.services.papi_client.get_employee")
+    @patch("app.services.nps_leader_service.list_leaders")
+    def test_reuses_provided_employee(self, mock_leaders, mock_emp):
+        mock_leaders.return_value = [{"alias": "direct1", "name": "Direct One", "org_id": "o"}]
+        employee = {"login": "jdoe", "name": "J D", "title": "",
+                    "manager_login": "direct1", "chain": ["direct1"]}
+        result = papi_client.resolve_leader_via_chain("o", "jdoe", employee=employee)
+        assert result["hops"] == 1
+        mock_emp.assert_not_called()
 
     @patch("app.services.nps_leader_service.list_leaders")
     def test_empty_roster_returns_none(self, mock_leaders):

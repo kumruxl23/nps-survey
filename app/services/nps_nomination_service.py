@@ -212,7 +212,7 @@ def _lookup_from_papi(org_id: str, plain_alias: str) -> dict | None:
         employee = papi_client.get_employee(plain_alias)
         if not employee:
             return None
-        chain = papi_client.resolve_leader_via_chain(org_id, plain_alias)
+        chain = papi_client.resolve_leader_via_chain(org_id, plain_alias, employee=employee)
         return {
             "name": employee["name"],
             "designation": employee["title"],

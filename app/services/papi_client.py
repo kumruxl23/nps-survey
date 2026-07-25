@@ -75,32 +75,32 @@ def _signed_get(url: str) -> requests.Response:
 def _parse_employee(data: dict) -> dict:
     """Normalize a PAPI employee payload to the fields the form needs.
 
-    Defensive about shape: manager login has appeared under different
-    keys across PAPI versions/expansions, so several are checked.
+    ``chain`` is the ordered upward supervisor chain (immediate manager
+    first) as lowercase logins, from the ``supervisor-chain`` expand.
     """
     basic = data.get("basicInfo", data) or {}
     first = (basic.get("firstName") or "").strip()
     last = (basic.get("lastName") or "").strip()
-    manager = (
-        basic.get("managerLogin")
-        or (data.get("manager") or {}).get("login")
-        or (data.get("job") or {}).get("managerLogin")
-        or ""
-    )
+    chain = [
+        str(sup.get("login") or "").lower()
+        for sup in (data.get("supervisorChain") or [])
+        if sup.get("login")
+    ]
     return {
         "login": (basic.get("login") or "").lower(),
         "name": f"{first} {last}".strip(),
         "title": basic.get("businessTitle") or "",
-        "manager_login": str(manager).lower(),
+        "manager_login": str(basic.get("managerLogin") or "").lower(),
+        "chain": chain,
     }
 
 
 def get_employee(alias: str) -> dict | None:
-    """Look up one employee by login.
+    """Look up one employee by login, including their supervisor chain.
 
-    Returns {login, name, title, manager_login} or None for unknown
-    aliases. Raises PapiError on transport/auth failures so callers can
-    fall back to org-history prefill.
+    Returns {login, name, title, manager_login, chain} or None for
+    unknown aliases. Raises PapiError on transport/auth failures so
+    callers can fall back to org-history prefill.
     """
     if not _enabled():
         raise PapiError("PAPI is not configured (PAPI_ROLE_ARN/PAPI_ENDPOINT)")
@@ -109,7 +109,7 @@ def get_employee(alias: str) -> dict | None:
         return None
 
     endpoint = os.environ["PAPI_ENDPOINT"].rstrip("/")
-    url = f"{endpoint}/v2/employee/login:{alias}?expand=job,manager"
+    url = f"{endpoint}/v2/employee/login:{alias}?expand=supervisor-chain"
     try:
         resp = _signed_get(url)
     except requests.RequestException as exc:
@@ -122,14 +122,16 @@ def get_employee(alias: str) -> dict | None:
     return _parse_employee(resp.json())
 
 
-def resolve_leader_via_chain(org_id: str, alias: str, max_hops: int = 10) -> dict | None:
-    """Walk the manager chain until hitting someone on the org's roster.
+def resolve_leader_via_chain(org_id: str, alias: str, employee: dict | None = None) -> dict | None:
+    """Find the org's leader within a person's span — single PAPI call.
 
-    "Highest leader within the span": starting at the alias itself (a
-    roster leader resolves to themselves), follow manager links upward;
-    the first roster member found is the leader. Returns
-    {leader_name, leader_alias, hops} or None if the chain never meets
+    "Highest leader within the span": starting with the alias itself (a
+    roster leader resolves to themselves), scan the upward supervisor
+    chain; the FIRST roster member found is the leader. Returns
+    {leader_name, leader_alias, hops} or None when the chain never meets
     the roster (person outside the org, or roster empty).
+
+    Pass ``employee`` (from get_employee) to avoid a duplicate lookup.
     """
     from app.services import nps_leader_service
 
@@ -141,15 +143,16 @@ def resolve_leader_via_chain(org_id: str, alias: str, max_hops: int = 10) -> dic
         return None
 
     current = (alias or "").strip().lower().split("@", 1)[0]
-    for hop in range(max_hops):
-        if current in roster:
-            return {"leader_name": roster[current], "leader_alias": current, "hops": hop}
+    if current in roster:
+        return {"leader_name": roster[current], "leader_alias": current, "hops": 0}
+
+    if employee is None:
         employee = get_employee(current)
-        if not employee or not employee["manager_login"]:
-            return None
-        if employee["manager_login"] == current:  # top of chain safety
-            return None
-        current = employee["manager_login"]
+    if not employee:
+        return None
+    for hop, login in enumerate(employee.get("chain", []), start=1):
+        if login in roster:
+            return {"leader_name": roster[login], "leader_alias": login, "hops": hop}
     return None
 
 
