@@ -28,10 +28,11 @@ def ddb_table():
 class TestAddLeader:
     def test_add_and_get(self, ddb_table):
         result = nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
-        assert result == {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": ""}
+        assert result == {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": "", "notify_alias": ""}
         assert nps_leader_service.get_leader("nsbhatia") == {
             "alias": "nsbhatia",
             "name": "Navjyot Bhatia",
+            "notify_alias": "",
         }
 
     def test_alias_normalized(self, ddb_table):
@@ -162,3 +163,94 @@ class TestSendNominationInvite:
         self._roster()
         with pytest.raises(RuntimeError, match="SES down"):
             nps_leader_service.send_nomination_invite(self._URL, "2026-08-01", org_id=self._ORG)
+
+
+# ---------------------------------------------------------------------------
+# Notify-alias (test redirect) + leader reminders (email + Slack)
+# ---------------------------------------------------------------------------
+
+
+def _put_org(org_id="org_alpha", slack_bot_token=""):
+    from app.db import nps_org_config_repo
+    from app.db.models import OrgConfig
+
+    nps_org_config_repo.put_org(OrgConfig(
+        org_id=org_id, org_name="Alpha Org", asana_project_gid="",
+        asana_form_url="", custom_field_nps_score_gid="",
+        custom_field_category_gid="", custom_field_org_name_gid="",
+        slack_bot_token=slack_bot_token,
+    ))
+
+
+class TestNotifyAlias:
+    def test_add_leader_with_notify_alias(self, ddb_table):
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", notify_alias="kumruxl")
+        assert nps_leader_service.get_leader("nsbhatia")["notify_alias"] == "kumruxl"
+
+    def test_set_notify_alias(self, ddb_table):
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
+        nps_leader_service.set_notify_alias("nsbhatia", "kuvinu")
+        assert nps_leader_service.get_leader("nsbhatia")["notify_alias"] == "kuvinu"
+
+    def test_set_notify_alias_missing_leader(self, ddb_table):
+        with pytest.raises(ValueError, match="not found"):
+            nps_leader_service.set_notify_alias("ghost", "kumruxl")
+
+
+class TestSendLeaderReminders:
+    @patch("app.services.slack_client.send_dm")
+    @patch("app.services.slack_client.lookup_user_by_email")
+    @patch("app.services.email_client.send_bcc_email")
+    def test_reminders_redirect_to_test_alias(self, mock_email, mock_lookup, mock_dm, ddb_table):
+        from app.db.models import EmailResult, SlackResult
+
+        _put_org(slack_bot_token="xoxb-test")
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        nps_leader_service.add_leader("raabhas", "Abhas Rao", org_id="org_alpha", notify_alias="kuvinu")
+        mock_email.return_value = EmailResult(ok=True)
+        mock_lookup.return_value = "U123"
+        mock_dm.return_value = SlackResult(ok=True)
+
+        result = nps_leader_service.send_leader_reminders("http://localhost/", "org_alpha")
+
+        assert result["email_sent"] == 2
+        assert result["slack_sent"] == 2
+        # Reminders went to the TEST aliases, never the real leaders.
+        emailed = [call.args[2][0] for call in mock_email.call_args_list]
+        assert "kumruxl@amazon.com" in emailed and "kuvinu@amazon.com" in emailed
+        assert "nsbhatia@amazon.com" not in emailed
+        looked = [call.args[0] for call in mock_lookup.call_args_list]
+        assert "kumruxl@amazon.com" in looked
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_no_slack_token_reports_and_still_emails(self, mock_email, ddb_table):
+        from app.db.models import EmailResult
+
+        _put_org(slack_bot_token="")  # no Slack configured
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        mock_email.return_value = EmailResult(ok=True)
+
+        result = nps_leader_service.send_leader_reminders("http://localhost/", "org_alpha")
+        assert result["email_sent"] == 1
+        assert result["slack_sent"] == 0
+        assert any("no bot token" in e for e in result["reminders"][0]["errors"])
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_demo_safe_skips_leaders_without_test_alias(self, mock_email, ddb_table, monkeypatch):
+        from app.db.models import EmailResult
+
+        _put_org()
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha")  # no redirect
+        monkeypatch.setenv("NPS_DEMO_SAFE", "1")
+        mock_email.return_value = EmailResult(ok=True)
+
+        result = nps_leader_service.send_leader_reminders(
+            "http://localhost/", "org_alpha", channels=("email",)
+        )
+        assert result["email_sent"] == 0
+        assert "demo-safe" in result["reminders"][0]["errors"][0]
+
+    def test_empty_roster_rejected(self, ddb_table):
+        _put_org(org_id="org_empty")
+        with pytest.raises(ValueError, match="roster is empty"):
+            nps_leader_service.send_leader_reminders("http://localhost/", "org_empty")

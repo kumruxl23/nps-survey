@@ -29,15 +29,22 @@ def _normalize_alias(alias: str) -> str:
     return alias.split("@", 1)[0]
 
 
-def add_leader(alias: str, name: str, org_id: str = "") -> dict:
+def add_leader(alias: str, name: str, org_id: str = "", notify_alias: str = "") -> dict:
     """Add a leader to the roster. Raises ValueError on bad input/duplicate.
 
     ``org_id`` scopes the leader to one org's nomination form. Empty means
     the leader appears for every org (legacy rows behave the same way).
+
+    ``notify_alias`` is an OPTIONAL redirect target for leader reminders
+    (email / Slack DM). When set, reminders that would go to this leader are
+    sent to ``notify_alias`` instead — used for TESTING so a real leader
+    (e.g. Navjyot) routes to a tester (e.g. kumruxl). Empty = send to the
+    leader's own alias.
     """
     alias = _normalize_alias(alias)
     name = (name or "").strip()
     org_id = (org_id or "").strip()
+    notify_alias = _normalize_alias(notify_alias)
     if not alias or not name:
         raise ValueError("Leader alias and name are required")
 
@@ -51,9 +58,26 @@ def add_leader(alias: str, name: str, org_id: str = "") -> dict:
         "org_id": key,
         "org_name": name,
         "leader_org": org_id,
+        "notify_alias": notify_alias,
         "is_active": True,
     })
-    return {"alias": alias, "name": name, "org_id": org_id}
+    return {"alias": alias, "name": name, "org_id": org_id, "notify_alias": notify_alias}
+
+
+def set_notify_alias(alias: str, notify_alias: str) -> dict:
+    """Set/clear the reminder redirect (test) alias for an existing leader."""
+    alias = _normalize_alias(alias)
+    notify_alias = _normalize_alias(notify_alias)
+    table = _get_table()
+    key = f"{LEADER_PREFIX}{alias}"
+    if not table.get_item(Key={"org_id": key}).get("Item"):
+        raise ValueError(f"Leader '{alias}' not found")
+    table.update_item(
+        Key={"org_id": key},
+        UpdateExpression="SET notify_alias = :n",
+        ExpressionAttributeValues={":n": notify_alias},
+    )
+    return {"alias": alias, "notify_alias": notify_alias}
 
 
 def list_leaders(org_id: str = "") -> list[dict]:
@@ -81,6 +105,7 @@ def list_leaders(org_id: str = "") -> list[dict]:
             "alias": item["org_id"].removeprefix(LEADER_PREFIX),
             "name": item.get("org_name", ""),
             "org_id": leader_org,
+            "notify_alias": item.get("notify_alias", "") or "",
         })
     return sorted(leaders, key=lambda leader: leader["name"].lower())
 
@@ -103,7 +128,11 @@ def get_leader(alias: str) -> dict | None:
     item = table.get_item(Key={"org_id": f"{LEADER_PREFIX}{alias}"}).get("Item")
     if not item or not item.get("is_active", True):
         return None
-    return {"alias": alias, "name": item.get("org_name", "")}
+    return {
+        "alias": alias,
+        "name": item.get("org_name", ""),
+        "notify_alias": item.get("notify_alias", "") or "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -174,4 +203,163 @@ def send_nomination_invite(base_url: str, deadline: str, note: str = "", org_id:
         "sent_count": len(recipients),
         "leaders": [leader["name"] for leader in leaders],
         "deadline": deadline,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Leader reminders (email + Slack DM) with a per-leader TEST redirect alias
+# ---------------------------------------------------------------------------
+#
+# Reminds each roster leader (to nominate their stakeholders) over email and
+# a Slack DM. For testing, a leader's ``notify_alias`` redirects both channels
+# to a tester (e.g. Navjyot -> kumruxl, Abhas -> kuvinu) so we never contact a
+# real leader while validating the flow. The message bodies below are
+# PLACEHOLDERS — the final copy/template will be refined later.
+
+
+def _recipient_alias(leader: dict) -> str:
+    """Where a leader's reminder actually goes: the test redirect if set."""
+    return (leader.get("notify_alias") or leader.get("alias") or "").strip().lower()
+
+
+def _reminder_subject(cycle_name: str = "") -> str:
+    tail = f" ({cycle_name})" if cycle_name else ""
+    return f"[NPS Survey] Reminder: nominate your stakeholders{tail}"
+
+
+def _build_leader_reminder_email(leader_name: str, link: str, note: str) -> str:
+    """PLACEHOLDER reminder email body (HTML). Copy to be refined later."""
+    import html
+
+    safe_name = html.escape(leader_name or "there")
+    note_html = f"<p>{html.escape(note)}</p>" if note else ""
+    return (
+        f"<p>Hi {safe_name},</p>"
+        "<p>[TEMPLATE PLACEHOLDER] This is a reminder to nominate the "
+        "stakeholders from your team who should receive the NPS survey this "
+        "cycle. Please use the form below.</p>"
+        f'<p><a href="{link}">Open the nomination form</a></p>'
+        f"{note_html}"
+        "<p>Thank you!</p>"
+    )
+
+
+def _build_leader_reminder_slack(leader_name: str, link: str, note: str) -> str:
+    """PLACEHOLDER reminder Slack DM text. Copy to be refined later."""
+    msg = (
+        f"Hi {leader_name or 'there'}, [TEMPLATE PLACEHOLDER] reminder to "
+        f"nominate your NPS survey stakeholders this cycle.\nOpen the form: {link}"
+    )
+    return msg + (f"\n{note}" if note else "")
+
+
+def send_leader_reminders(
+    base_url: str,
+    org_id: str,
+    note: str = "",
+    channels: tuple = ("email", "slack"),
+) -> dict:
+    """Send an email + Slack DM reminder to each roster leader in an org.
+
+    Each reminder goes to the leader's ``notify_alias`` when set (the TEST
+    redirect), else the leader's own alias. Slack uses the org's bot token
+    (from OrgConfig); if it's missing, Slack is skipped and reported per row.
+
+    Demo-safe (``NPS_DEMO_SAFE``) blocks sends to leaders WITHOUT a test
+    redirect, so real leaders are never contacted during testing.
+
+    Returns:
+        {org_id, link, email_sent, slack_sent, reminders: [
+            {leader, recipient_alias, email_ok, slack_ok, errors}
+        ]}
+    """
+    from app.services import (
+        email_client,
+        nps_org_config_service,
+        nps_share_link_service,
+        slack_client,
+    )
+
+    org_id = (org_id or "").strip()
+    if not org_id:
+        raise ValueError("org_id is required — reminders are sent per org")
+    leaders = list_leaders(org_id)
+    if not leaders:
+        raise ValueError("The leader roster is empty — add leaders first")
+
+    token = nps_share_link_service.get_or_create_token(org_id)
+    link = f"{base_url.rstrip('/')}/nps/nominate/view?token={token}"
+    from_address = os.environ.get("NPS_FROM_ADDRESS", "")
+
+    org = next(
+        (o for o in nps_org_config_service.list_all_orgs() if o.org_id == org_id),
+        None,
+    )
+    bot_token = (getattr(org, "slack_bot_token", "") if org else "") or ""
+
+    want_email = "email" in channels
+    want_slack = "slack" in channels
+    demo = _demo_safe()
+    reminders = []
+
+    for leader in leaders:
+        recipient = _recipient_alias(leader)
+        overridden = bool(leader.get("notify_alias"))
+        row = {
+            "leader": leader["name"],
+            "recipient_alias": recipient,
+            "email_ok": False,
+            "slack_ok": False,
+            "errors": [],
+        }
+
+        if demo and not overridden:
+            row["errors"].append("skipped: demo-safe on and no test alias set")
+            reminders.append(row)
+            continue
+        if not recipient:
+            row["errors"].append("no recipient alias")
+            reminders.append(row)
+            continue
+
+        recipient_email = f"{recipient}@amazon.com"
+
+        if want_email:
+            result = email_client.send_bcc_email(
+                _reminder_subject(),
+                _build_leader_reminder_email(leader["name"], link, note),
+                [recipient_email],
+                from_address,
+            )
+            row["email_ok"] = result.ok
+            if not result.ok:
+                row["errors"].append(f"email: {result.error}")
+
+        if want_slack:
+            if not bot_token:
+                row["errors"].append("slack: no bot token configured for this org")
+            else:
+                try:
+                    user_id = slack_client.lookup_user_by_email(recipient_email, bot_token)
+                    dm = slack_client.send_dm(
+                        user_id,
+                        _build_leader_reminder_slack(leader["name"], link, note),
+                        bot_token,
+                    )
+                    row["slack_ok"] = dm.ok
+                    if not dm.ok:
+                        row["errors"].append(f"slack: {dm.error}")
+                except slack_client.SlackUserNotFoundError as exc:
+                    row["errors"].append(f"slack: {exc}")
+                except Exception as exc:  # transport/other — never break the batch
+                    row["errors"].append(f"slack: {exc}")
+
+        reminders.append(row)
+
+    return {
+        "org_id": org_id,
+        "link": link,
+        "email_sent": sum(1 for r in reminders if r["email_ok"]),
+        "slack_sent": sum(1 for r in reminders if r["slack_ok"]),
+        "reminders": reminders,
     }

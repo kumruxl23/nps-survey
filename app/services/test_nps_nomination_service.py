@@ -347,3 +347,123 @@ class TestRemoveLeaderNomination:
         remaining = nps_nomination_service.list_nominations(_ORG, _CYCLE)
         assert len(remaining) == 1
         assert remaining[0].leader == "Navjyot Bhatia"
+
+
+# ---------------------------------------------------------------------------
+# Counts, prior-cycle carry-forward, and bulk nomination
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def form_tables_with_cycles():
+    """Nomination + org-config + cycle tables (for prior-cycle tests)."""
+    from app.db import nps_cycle_repo, nps_org_config_repo
+
+    with mock_aws():
+        nps_nomination_repo._create_table()
+        nps_org_config_repo._create_table()
+        nps_cycle_repo._create_table()
+        yield
+
+
+class TestCountNominationsByLeader:
+    def test_counts_and_includes_zero_roster_leaders(self, form_tables):
+        from app.services import nps_leader_service
+
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
+        nps_leader_service.add_leader("raabhas", "Abhas Rao")  # zero noms
+        nps_nomination_service.nominate_stakeholder(
+            _ORG, _CYCLE, "a1", "Alice", "Navjyot Bhatia", nominated_by="d1"
+        )
+        nps_nomination_service.nominate_stakeholder(
+            _ORG, _CYCLE, "b1", "Bob", "Navjyot Bhatia", nominated_by="d2"
+        )
+        counts = {r["leader"]: r["count"]
+                  for r in nps_nomination_service.count_nominations_by_leader(_ORG, _CYCLE)}
+        assert counts["Navjyot Bhatia"] == 2
+        assert counts["Abhas Rao"] == 0  # roster leader with no noms still listed
+
+
+class TestListPriorCycleResponded:
+    def _seed(self):
+        from app.db import nps_cycle_repo
+        from app.db.models import SurveyCycle
+
+        nps_cycle_repo.put_cycle(SurveyCycle(
+            org_id=_ORG, cycle_id="prev", start_date="2025-01-01",
+            end_date="2025-06-30", status="closed", reminder_mode="manual",
+            cycle_name="H1 2025",
+        ))
+        nps_cycle_repo.put_cycle(SurveyCycle(
+            org_id=_ORG, cycle_id=_CYCLE, start_date="2026-01-01",
+            end_date="2026-06-30", status="active", reminder_mode="manual",
+            cycle_name="H1 2026",
+        ))
+        # prev cycle: one responded, one not
+        nps_nomination_service.nominate_stakeholder(
+            _ORG, "prev", "resp1", "Responder One", "Navjyot Bhatia", nominated_by="d1"
+        )
+        nps_nomination_repo.update_responded(_ORG, "prev", "resp1@amazon.com")
+        nps_nomination_service.nominate_stakeholder(
+            _ORG, "prev", "noresp", "No Responder", "Navjyot Bhatia", nominated_by="d1"
+        )
+
+    def test_only_responded_returned(self, form_tables_with_cycles):
+        self._seed()
+        result = nps_nomination_service.list_prior_cycle_responded(
+            _ORG, _CYCLE, "Navjyot Bhatia"
+        )
+        assert result["prior_cycle_id"] == "prev"
+        emails = [s["email"] for s in result["stakeholders"]]
+        assert emails == ["resp1@amazon.com"]  # non-responder dropped
+        assert result["stakeholders"][0]["already_nominated"] is False
+
+    def test_already_nominated_annotation(self, form_tables_with_cycles):
+        self._seed()
+        # Nominate the same person under the same leader in the current cycle.
+        nps_nomination_service.nominate_stakeholder(
+            _ORG, _CYCLE, "resp1", "Responder One", "Navjyot Bhatia", nominated_by="d9"
+        )
+        result = nps_nomination_service.list_prior_cycle_responded(
+            _ORG, _CYCLE, "Navjyot Bhatia"
+        )
+        s = result["stakeholders"][0]
+        assert s["already_nominated"] is True
+        assert s["existing_nominated_by"] == "d9"
+
+    def test_no_closed_cycle(self, form_tables_with_cycles):
+        result = nps_nomination_service.list_prior_cycle_responded(
+            _ORG, _CYCLE, "Navjyot Bhatia"
+        )
+        assert result["stakeholders"] == []
+
+
+class TestBulkNominate:
+    def test_bulk_add_with_duplicates_and_errors(self, form_tables):
+        # Pre-existing nomination to force a duplicate.
+        nps_nomination_service.nominate_stakeholder(
+            _ORG, _CYCLE, "dup", "Dup Person", "Navjyot Bhatia", nominated_by="d1"
+        )
+        result = nps_nomination_service.bulk_nominate_stakeholders(
+            _ORG, _CYCLE, leader="Navjyot Bhatia", nominated_by="d2",
+            stakeholders=[
+                {"stakeholder_alias": "new1", "name": "New One"},
+                {"stakeholder_alias": "dup", "name": "Dup Person"},  # duplicate
+                {"stakeholder_alias": "", "name": ""},  # error (no alias)
+            ],
+        )
+        assert [a["alias"] for a in result["added"]] == ["new1"]
+        assert result["duplicates"][0]["alias"] == "dup"
+        assert result["duplicates"][0]["existing_nominated_by"] == "d1"
+        assert len(result["errors"]) == 1
+
+    def test_bulk_backfills_name_from_roster(self, form_tables):
+        from app.services import nps_leader_service
+
+        # A roster leader resolves to their own name via lookup_person.
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia")
+        result = nps_nomination_service.bulk_nominate_stakeholders(
+            _ORG, _CYCLE, leader="Navjyot Bhatia", nominated_by="d1",
+            stakeholders=[{"stakeholder_alias": "nsbhatia"}],  # no name supplied
+        )
+        assert [a["name"] for a in result["added"]] == ["Navjyot Bhatia"]

@@ -149,7 +149,7 @@ class TestNominateListAndContext:
         assert body["orgs"][0]["active_cycle"]["cycle_name"] == "H2 2026"
         # Leaders now ride on each org (org-scoped rosters).
         assert body["orgs"][0]["leaders"] == [
-            {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": ""}
+            {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": "", "notify_alias": ""}
         ]
         assert body["locked_org"] is None
         assert body["viewer"]["alias"] == "direct1"
@@ -417,3 +417,118 @@ class TestPrefill:
 
     def test_requires_params(self, client):
         assert client.get("/nps/nominate/prefill").status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Counts table, broadened list visibility, prior-cycle, and bulk add
+# ---------------------------------------------------------------------------
+
+
+class TestLeaderCounts:
+    def test_counts_visible_to_regular_user(self, client):
+        _submit(client)  # direct1 (editor) nominates jdoe under Navjyot
+        _set_user(client, "someguy", "viewer")  # non-privileged
+        resp = client.get(f"/nps/nominate/leader-counts?org_id={_ORG}")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        counts = {r["leader"]: r["count"] for r in body["leaders"]}
+        # fixture seeds direct1 under Navjyot; _submit adds jdoe -> 2 total.
+        assert counts["Navjyot Bhatia"] == 2
+
+
+class TestListStaysPrivileged:
+    """Current-cycle who-nominated-whom list is admin/editor/roster-leader only.
+
+    A nomination is gauged at the leader level, so directs do NOT see the
+    detailed list even for their own leader — they use the carry-forward
+    list and the duplicate-conflict response instead.
+    """
+
+    def test_direct_cannot_see_current_list(self, client):
+        _submit(client)  # jdoe under Navjyot
+        _set_user(client, "direct1", "viewer")  # a direct (resolves to Navjyot)
+        resp = client.get(
+            f"/nps/nominate/list?org_id={_ORG}&leader=Navjyot%20Bhatia"
+        )
+        assert resp.status_code == 403
+
+    def test_privileged_sees_current_list(self, client):
+        _submit(client)
+        # default fixture user direct1 is an editor -> privileged
+        resp = client.get(
+            f"/nps/nominate/list?org_id={_ORG}&leader=Navjyot%20Bhatia"
+        )
+        assert resp.status_code == 200
+        assert any(r["email"] == "jdoe@amazon.com" for r in resp.get_json())
+
+
+class TestPreviousCycle:
+    def _seed_prior(self, client):
+        nps_cycle_repo.put_cycle(SurveyCycle(
+            org_id=_ORG, cycle_id="cycle_prev", start_date="2025-01-01",
+            end_date="2025-06-30", status="closed", reminder_mode="manual",
+            cycle_name="H1 2025",
+        ))
+        nps_nomination_repo.put_nomination(Nomination(
+            org_id=_ORG, cycle_id="cycle_prev", email="resp1@amazon.com",
+            name="Responder One", leader="Navjyot Bhatia", responded=True,
+        ))
+        nps_nomination_repo.put_nomination(Nomination(
+            org_id=_ORG, cycle_id="cycle_prev", email="noresp@amazon.com",
+            name="No Responder", leader="Navjyot Bhatia", responded=False,
+        ))
+
+    def test_previous_returns_only_responded(self, client):
+        self._seed_prior(client)
+        _set_user(client, "direct1", "viewer")  # resolves to Navjyot
+        resp = client.get(
+            f"/nps/nominate/previous?org_id={_ORG}&leader=Navjyot%20Bhatia"
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["prior_cycle_id"] == "cycle_prev"
+        emails = [s["email"] for s in body["stakeholders"]]
+        assert emails == ["resp1@amazon.com"]
+
+    def test_previous_blocked_for_other_leader(self, client):
+        self._seed_prior(client)
+        _set_user(client, "direct1", "viewer")
+        resp = client.get(
+            f"/nps/nominate/previous?org_id={_ORG}&leader=Other%20Leader"
+        )
+        assert resp.status_code == 403
+
+
+class TestBulkSubmit:
+    def test_bulk_files_under_resolved_leader(self, client):
+        # direct1 resolves to Navjyot; leader is never taken from the body.
+        resp = client.post("/nps/nominate/bulk-submit", json={
+            "org_id": _ORG,
+            "stakeholders": [
+                {"stakeholder_alias": "bulk1", "name": "Bulk One"},
+                {"stakeholder_alias": "bulk2", "name": "Bulk Two"},
+            ],
+        })
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert len(body["added"]) == 2
+        # Both filed under the system-resolved leader.
+        rows = client.get(
+            f"/nps/nominate/list?org_id={_ORG}&leader=Navjyot%20Bhatia"
+        ).get_json()
+        emails = [r["email"] for r in rows]
+        assert "bulk1@amazon.com" in emails and "bulk2@amazon.com" in emails
+
+    def test_bulk_reports_duplicates(self, client):
+        _submit(client, stakeholder_alias="dup", name="Dup Person")
+        resp = client.post("/nps/nominate/bulk-submit", json={
+            "org_id": _ORG,
+            "stakeholders": [{"stakeholder_alias": "dup", "name": "Dup Person"}],
+        })
+        assert resp.status_code == 200
+        assert resp.get_json()["duplicates"][0]["alias"] == "dup"
+
+    def test_bulk_requires_stakeholders(self, client):
+        resp = client.post("/nps/nominate/bulk-submit",
+                           json={"org_id": _ORG, "stakeholders": []})
+        assert resp.status_code == 400

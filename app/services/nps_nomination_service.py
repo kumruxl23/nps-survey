@@ -326,3 +326,143 @@ def remove_leader_nomination(
         )
 
     nps_nomination_repo.delete_nomination(org_id, cycle_id, nomination.email)
+
+
+# ---------------------------------------------------------------------------
+# Nomination-form enhancements: per-leader counts, prior-cycle carry-forward,
+# and bulk nomination (Sprint: dashboard/nominate visibility changes)
+# ---------------------------------------------------------------------------
+
+
+def count_nominations_by_leader(org_id: str, cycle_id: str) -> list[dict]:
+    """Return [{leader, count}] for a cycle, one row per roster leader.
+
+    Counts current-cycle nominations grouped by leader, and always includes
+    every roster leader (0 if none yet). This is a COUNTS-ONLY view — it
+    exposes no nominee/nominator identities, so it is safe to show to any
+    viewer of the org's nomination page.
+    """
+    rows = nps_nomination_repo.list_nominations(org_id, cycle_id)
+    counts: dict[str, int] = {}
+    for n in rows:
+        leader = (n.leader or "").strip()
+        if leader:
+            counts[leader] = counts.get(leader, 0) + 1
+    # Ensure every active roster leader appears, even with zero nominations.
+    for leader_entry in nps_leader_service.list_leaders(org_id):
+        counts.setdefault(leader_entry["name"], 0)
+    return sorted(
+        ({"leader": leader, "count": count} for leader, count in counts.items()),
+        key=lambda row: row["leader"].lower(),
+    )
+
+
+def _most_recent_closed_cycle(org_id: str):
+    """Return the most recent CLOSED cycle for an org, or None."""
+    from app.db import nps_cycle_repo
+
+    closed = [c for c in nps_cycle_repo.list_cycles(org_id) if c.status == "closed"]
+    if not closed:
+        return None
+    return sorted(closed, key=lambda c: c.start_date or "", reverse=True)[0]
+
+
+def list_prior_cycle_responded(org_id: str, cycle_id: str, leader: str) -> dict:
+    """Prior CLOSED cycle's stakeholders under a leader who RESPONDED.
+
+    Non-respondents from the prior cycle are dropped. Each returned
+    stakeholder is annotated with whether they are ALREADY nominated under
+    the same leader in the current (``cycle_id``) cycle, and by whom — so
+    the UI can disable "Add" and show the existing nominator on a duplicate.
+
+    Returns:
+        {prior_cycle_id, prior_cycle_name, stakeholders: [
+            {email, name, designation, already_nominated, existing_nominated_by}
+        ]}
+    """
+    leader = (leader or "").strip()
+    prev = _most_recent_closed_cycle(org_id)
+    if not prev:
+        return {"prior_cycle_id": "", "prior_cycle_name": "", "stakeholders": []}
+
+    # Current-cycle rows under this leader → for duplicate annotation.
+    current_rows = nps_nomination_repo.list_nominations(org_id, cycle_id)
+
+    stakeholders = []
+    for n in nps_nomination_repo.list_nominations(org_id, prev.cycle_id):
+        if (n.leader or "").strip() != leader:
+            continue
+        if not n.responded:
+            continue  # only carry forward those who actually responded
+        email = base_email(n.email)
+        existing = find_nomination_for_leader(current_rows, email, leader)
+        stakeholders.append({
+            "email": email,
+            "name": n.name,
+            "designation": n.designation,
+            "already_nominated": existing is not None,
+            "existing_nominated_by": existing.nominated_by if existing else "",
+        })
+    stakeholders.sort(key=lambda s: (s["name"] or s["email"]).lower())
+    return {
+        "prior_cycle_id": prev.cycle_id,
+        "prior_cycle_name": prev.cycle_name or prev.cycle_id,
+        "stakeholders": stakeholders,
+    }
+
+
+def bulk_nominate_stakeholders(
+    org_id: str,
+    cycle_id: str,
+    leader: str,
+    nominated_by: str,
+    stakeholders: list[dict],
+) -> dict:
+    """Nominate several stakeholders under one leader in a single call.
+
+    ``leader`` is the nominator's already-resolved leader (never client
+    chosen) and ``nominated_by`` is the server-side identity — both are
+    passed straight through to :func:`nominate_stakeholder`, so every row
+    is subject to the same first-come-first-served duplicate rule.
+
+    Returns a per-row breakdown:
+        {added: [{alias, name}],
+         duplicates: [{alias, existing_nominated_by}],
+         errors: [{alias, error}]}
+    """
+    added: list[dict] = []
+    duplicates: list[dict] = []
+    errors: list[dict] = []
+
+    for item in stakeholders or []:
+        alias = (item.get("stakeholder_alias") or "").strip()
+        name = (item.get("name") or "").strip()
+        # Bulk paste often supplies aliases only — backfill the name from the
+        # directory/history so the row isn't rejected for a missing name.
+        if alias and not name:
+            person = lookup_person(org_id, alias)
+            if person and person.get("name"):
+                name = person["name"]
+        try:
+            nomination = nominate_stakeholder(
+                org_id=org_id,
+                cycle_id=cycle_id,
+                stakeholder_alias=alias,
+                name=name,
+                leader=leader,
+                nominated_by=nominated_by,
+                designation=item.get("designation", ""),
+            )
+            added.append({
+                "alias": base_email(nomination.email).split("@", 1)[0],
+                "name": nomination.name,
+            })
+        except DuplicateNominationError as exc:
+            duplicates.append({
+                "alias": alias,
+                "existing_nominated_by": exc.existing.nominated_by,
+            })
+        except ValueError as exc:
+            errors.append({"alias": alias, "error": str(exc)})
+
+    return {"added": added, "duplicates": duplicates, "errors": errors}

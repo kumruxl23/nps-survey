@@ -2,8 +2,35 @@
 {% block title %}Nominate Stakeholders - NPS Survey{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-  <div class="col-lg-8">
+<!-- Prominent active-cycle banner (top of page) -->
+<div id="active-cycle-banner" class="alert alert-info d-flex align-items-center gap-2 mb-3">
+  <span class="fw-semibold">Active cycle:</span>
+  <span id="active-cycle-text">…</span>
+</div>
+
+<div class="row g-3">
+  <!-- Left: per-leader nomination counts (visible to everyone) -->
+  <div class="col-lg-3">
+    <div class="card">
+      <div class="card-header py-2">
+        <strong>Nominations by leader</strong>
+        <div class="form-text m-0" id="counts-cycle-info"></div>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr><th class="ps-3">Leader</th><th class="text-end pe-3">Noms</th></tr>
+          </thead>
+          <tbody id="leader-counts-body">
+            <tr><td colspan="2" class="text-muted text-center py-3">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: nomination form + lists -->
+  <div class="col-lg-9">
     <div class="d-flex justify-content-between align-items-start">
       <h4 class="mb-1">Nominate Stakeholders</h4>
       <div>
@@ -12,6 +39,9 @@
         </button>
         <button id="invite-btn" class="btn btn-sm btn-outline-success d-none" data-bs-toggle="modal" data-bs-target="#invite-modal">
           &#9993; Invite leaders
+        </button>
+        <button id="remind-btn" class="btn btn-sm btn-outline-warning d-none">
+          &#128276; Remind leaders (test)
         </button>
       </div>
     </div>
@@ -37,7 +67,7 @@
             <div id="org-locked" class="form-control-plaintext fw-semibold d-none"></div>
             <div id="cycle-info" class="form-text"></div>
           </div>
-          <div class="col-md-6" id="leader-block">
+          <div class="col-md-6 d-none" id="leader-block">
             <label class="form-label">View nominations under</label>
             <select id="leader-select" class="form-select">
               <option value="">-- select leader --</option>
@@ -59,7 +89,15 @@
             <input id="stakeholder-designation" class="form-control" placeholder="e.g. Sr. Program Manager" autocomplete="off">
           </div>
         </div>
-        <button id="submit-btn" class="btn btn-success mt-3">Nominate</button>
+        <div class="mt-3 d-flex gap-2 flex-wrap">
+          <button id="submit-btn" class="btn btn-success">Nominate</button>
+          <button id="prev-btn" class="btn btn-outline-secondary d-none" data-bs-toggle="modal" data-bs-target="#prev-modal">
+            &#8635; Add from last cycle
+          </button>
+          <button id="bulk-btn" class="btn btn-outline-secondary d-none" data-bs-toggle="modal" data-bs-target="#bulk-modal">
+            &#43; Bulk add
+          </button>
+        </div>
       </div>
     </div>
 
@@ -114,6 +152,57 @@
   </div>
 </div>
 
+<!-- Last-cycle carry-forward modal -->
+<div class="modal fade" id="prev-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add from last cycle <span id="prev-cycle-label" class="text-muted small"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Stakeholders under <strong id="prev-leader-name"></strong> who
+          <strong>responded</strong> last cycle. Click <em>Add</em> to nominate
+          them for the current cycle. Rows already nominated this cycle are
+          disabled and show who nominated them.
+        </p>
+        <div id="prev-modal-body"><div class="text-center py-3"><div class="spinner-border text-success"></div></div></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-success" id="prev-add-all-btn">Add all available</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk add modal -->
+<div class="modal fade" id="bulk-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Bulk add stakeholders</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Paste one alias per line (optionally <code>alias, Full Name</code>).
+          Names are looked up automatically when omitted. All are nominated
+          under your leader (<strong id="bulk-leader-name"></strong>); duplicates
+          are skipped and reported.
+        </p>
+        <textarea id="bulk-input" class="form-control" rows="8" placeholder="jdoe&#10;asmith, Alice Smith&#10;bpatel"></textarea>
+        <div id="bulk-result" class="mt-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-success" id="bulk-add-btn">Add all</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Duplicate nomination modal -->
 <div class="modal fade" id="dup-modal" tabindex="-1">
   <div class="modal-dialog">
@@ -139,6 +228,7 @@ const cycleInfo = document.getElementById('cycle-info');
 let orgs = [];
 let leaderAliases = {};  // leader name -> roster alias
 let lastRows = [];       // cached rows for the current leader
+let myLeader = '';       // the viewer's own system-resolved leader (files here)
 
 // Share-token support: when opened via a shared link (?token=...), pass the
 // token through on every API call so leaders without accounts can use the form.
@@ -172,20 +262,43 @@ function isPrivileged() {
   return !!viewer.privileged_orgs[orgSelect.value];
 }
 
+// The leader whose list we are VIEWING: privileged users pick via the
+// dropdown; everyone else views their own resolved leader.
+function viewedLeader() {
+  return isPrivileged() ? leaderSelect.value : myLeader;
+}
+
+// Adds always file under the viewer's OWN resolved leader (server enforces
+// this too). So carry-forward / bulk are only enabled when the leader we're
+// viewing is the viewer's own leader.
+function canAddForViewed() {
+  return !!myLeader && viewedLeader() === myLeader;
+}
+
 function populateLeaders() {
   const org = activeOrg();
   const leaders = (org && org.leaders) || [];
   leaderSelect.innerHTML = '<option value="">-- select leader --</option>' +
-    leaders.map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+    leaders.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('');
   leaderAliases = Object.fromEntries(leaders.map(l => [l.name, l.alias]));
 }
 
 function applyPrivilegeUI() {
-  // Regular nominators: no leader picker, no nominations table — the
-  // system resolves their leader and duplicates surface only on submit.
+  // Only admins/editors/roster-leaders get the leader picker AND the
+  // current-cycle who-nominated-whom list — a nomination is gauged at the
+  // leader level, so that detail stays privileged. Directs still get the
+  // counts table, last-cycle carry-forward, and bulk add.
   const priv = isPrivileged();
   document.getElementById('leader-block').classList.toggle('d-none', !priv);
   document.getElementById('nominations-card').classList.toggle('d-none', !priv);
+}
+
+// Toggle the "Add from last cycle" / "Bulk add" buttons based on whether the
+// viewer can file under the currently-viewed leader.
+function updateAddButtons() {
+  const show = canAddForViewed();
+  document.getElementById('prev-btn').classList.toggle('d-none', !show);
+  document.getElementById('bulk-btn').classList.toggle('d-none', !show);
 }
 
 async function loadViewer() {
@@ -195,19 +308,22 @@ async function loadViewer() {
   const leaderInfo = document.getElementById('viewer-leader-info');
   nameEl.textContent = viewer.alias || 'unknown';
   leaderInfo.textContent = '';
-  if (!viewer.alias || !orgSelect.value) return;
+  myLeader = '';
+  if (!viewer.alias || !orgSelect.value) { updateAddButtons(); return; }
   const p = await prefillFor(viewer.alias);
   if (p && p.name) nameEl.textContent = `${p.name} (${viewer.alias})`;
   if (p && p.leader) {
-    leaderInfo.innerHTML = ` — your leader: <strong>${p.leader}</strong> (nominations file here)`;
-    // Default the viewing filter to your own list.
-    if (leaderAliases[p.leader] !== undefined && !leaderSelect.value) {
+    myLeader = p.leader;
+    leaderInfo.innerHTML = ` — your leader: <strong>${esc(p.leader)}</strong> (nominations file here)`;
+    // Default the privileged viewing filter to your own list.
+    if (isPrivileged() && leaderAliases[p.leader] !== undefined && !leaderSelect.value) {
       leaderSelect.value = p.leader;
-      refreshTable();
     }
   } else {
     leaderInfo.innerHTML = ' — <span class="text-danger">no leader could be resolved for this org; contact an admin before nominating</span>';
   }
+  updateAddButtons();
+  refreshTable();
 }
 
 async function loadContext() {
@@ -219,6 +335,7 @@ async function loadContext() {
     const btn = document.getElementById('share-btn');
     btn.classList.remove('d-none');
     document.getElementById('invite-btn').classList.remove('d-none');
+    document.getElementById('remind-btn').classList.remove('d-none');
     btn.addEventListener('click', async () => {
       const path = sharePaths[orgSelect.value];
       if (!path) { showAlert('warning', 'No share link for this org.'); return; }
@@ -232,7 +349,7 @@ async function loadContext() {
     });
   }
   orgs = data.orgs || [];
-  orgSelect.innerHTML = orgs.map(o => `<option value="${o.org_id}">${o.org_name}</option>`).join('');
+  orgSelect.innerHTML = orgs.map(o => `<option value="${esc(o.org_id)}">${esc(o.org_name)}</option>`).join('');
   // Default to the first org that actually has an active cycle.
   const withCycle = orgs.find(o => o.active_cycle);
   if (withCycle) orgSelect.value = withCycle.org_id;
@@ -247,7 +364,30 @@ async function loadContext() {
   populateLeaders();
   applyPrivilegeUI();
   updateCycleInfo();
+  loadCounts();
   loadViewer();
+}
+
+// ── Per-leader counts (visible to everyone) ──────────────────────
+async function loadCounts() {
+  const body = document.getElementById('leader-counts-body');
+  const info = document.getElementById('counts-cycle-info');
+  if (!orgSelect.value) { body.innerHTML = ''; return; }
+  const res = await fetch(withToken(`/nps/nominate/leader-counts?org_id=${encodeURIComponent(orgSelect.value)}`));
+  if (!res.ok) {
+    body.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Could not load</td></tr>';
+    return;
+  }
+  const data = await res.json();
+  const rows = data.leaders || [];
+  info.textContent = data.cycle_id ? '' : 'No active cycle';
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">No leaders</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r =>
+    `<tr><td class="ps-3">${esc(r.leader)}</td><td class="text-end pe-3"><strong>${esc(r.count)}</strong></td></tr>`
+  ).join('');
 }
 
 // ── Alias-driven prefill ─────────────────────────────────────────
@@ -291,20 +431,29 @@ function activeOrg() { return orgs.find(o => o.org_id === orgSelect.value); }
 function updateCycleInfo() {
   const org = activeOrg();
   const cycle = org && org.active_cycle;
+  const banner = document.getElementById('active-cycle-banner');
+  const bannerText = document.getElementById('active-cycle-text');
   if (cycle) {
-    cycleInfo.textContent = `Active cycle: ${cycle.cycle_name} (ends ${cycle.end_date})`;
+    const label = `${cycle.cycle_name} (ends ${cycle.end_date})`;
+    cycleInfo.textContent = `Active cycle: ${label}`;
     cycleInfo.classList.remove('text-danger');
+    bannerText.textContent = org.org_name ? `${label} — ${org.org_name}` : label;
+    banner.classList.remove('alert-warning');
+    banner.classList.add('alert-info');
     document.getElementById('submit-btn').disabled = false;
   } else {
     cycleInfo.textContent = 'No active survey cycle for this org — nominations are closed.';
     cycleInfo.classList.add('text-danger');
+    bannerText.textContent = 'No active survey cycle for this org — nominations are closed.';
+    banner.classList.remove('alert-info');
+    banner.classList.add('alert-warning');
     document.getElementById('submit-btn').disabled = true;
   }
 }
 
 async function refreshTable() {
-  if (!isPrivileged()) return;  // list API rejects non-privileged anyway
-  const leader = leaderSelect.value;
+  if (!isPrivileged()) return;  // current-cycle list is privileged-only
+  const leader = viewedLeader();
   const body = document.getElementById('nominations-body');
   document.getElementById('table-leader-name').textContent = leader || 'selected leader';
   if (!leader || !orgSelect.value) {
@@ -313,6 +462,11 @@ async function refreshTable() {
     return;
   }
   const res = await fetch(withToken(`/nps/nominate/list?org_id=${encodeURIComponent(orgSelect.value)}&leader=${encodeURIComponent(leader)}`));
+  if (res.status === 403) {
+    lastRows = [];
+    body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">You can view nominations under your own leader only.</td></tr>';
+    return;
+  }
   if (!res.ok) {
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Could not load nominations</td></tr>';
     return;
@@ -323,11 +477,11 @@ async function refreshTable() {
 
 function canRemove(row) {
   // Remove appears for rows you own: you are the nominator, or the leader
-  // this list belongs to. (Only privileged viewers see this table at all.)
+  // this list belongs to.
   const me = (viewer.alias || '').toLowerCase();
   if (!me) return false;
   if (row.nominated_by && row.nominated_by.toLowerCase() === me) return true;
-  return (leaderAliases[leaderSelect.value] || '') === me;
+  return (leaderAliases[viewedLeader()] || '') === me;
 }
 
 function renderRows() {
@@ -374,6 +528,7 @@ async function submitNomination() {
     showAlert('success', `Nominated <strong>${esc(payload.name)}</strong> under ${esc(data.leader)}.`);
     ['stakeholder-alias', 'stakeholder-name', 'stakeholder-designation'].forEach(id => document.getElementById(id).value = '');
     refreshTable();
+    loadCounts();
   } else if (res.status === 409 && data.duplicate) {
     const e = data.existing || {};
     const when = e.created_at ? ` on ${e.created_at.slice(0, 10)}` : '';
@@ -389,19 +544,147 @@ async function submitNomination() {
 }
 
 async function removeNomination(stakeholderAlias) {
-  if (!confirm(`Remove ${stakeholderAlias} from ${leaderSelect.value}'s nominations?`)) return;
+  if (!confirm(`Remove ${stakeholderAlias} from ${viewedLeader()}'s nominations?`)) return;
   const res = await fetch(withToken('/nps/nominate/remove'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       org_id: orgSelect.value,
-      leader: leaderSelect.value,
+      leader: viewedLeader(),
       stakeholder_alias: stakeholderAlias,
     }),
   });
   const data = await res.json();
-  if (res.ok) { showAlert('success', 'Nomination removed.'); refreshTable(); }
+  if (res.ok) { showAlert('success', 'Nomination removed.'); refreshTable(); loadCounts(); }
   else { showAlert('danger', data.error || 'Could not remove nomination.'); }
+}
+
+// ── Add from last cycle ──────────────────────────────────────────
+let prevRows = [];
+
+async function loadPrev() {
+  const leader = viewedLeader();
+  document.getElementById('prev-leader-name').textContent = leader || '';
+  const body = document.getElementById('prev-modal-body');
+  body.innerHTML = '<div class="text-center py-3"><div class="spinner-border text-success"></div></div>';
+  if (!leader || !orgSelect.value) { body.innerHTML = '<p class="text-muted m-0">No leader selected.</p>'; return; }
+  const res = await fetch(withToken(`/nps/nominate/previous?org_id=${encodeURIComponent(orgSelect.value)}&leader=${encodeURIComponent(leader)}`));
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    body.innerHTML = `<div class="alert alert-danger">${esc(d.error || 'Could not load last-cycle nominations.')}</div>`;
+    return;
+  }
+  const data = await res.json();
+  document.getElementById('prev-cycle-label').textContent = data.prior_cycle_name ? `(${data.prior_cycle_name})` : '';
+  prevRows = data.stakeholders || [];
+  renderPrev();
+}
+
+function renderPrev() {
+  const body = document.getElementById('prev-modal-body');
+  if (!prevRows.length) {
+    body.innerHTML = '<p class="text-muted m-0">No responded stakeholders from last cycle under this leader.</p>';
+    return;
+  }
+  let h = `<table class="table table-sm table-hover"><thead class="table-light"><tr>
+    <th class="ps-3">Name</th><th>Alias</th><th>Designation</th><th class="text-end pe-3"></th></tr></thead><tbody>`;
+  prevRows.forEach((r, i) => {
+    const alias = aliasOf(r.email);
+    let action;
+    if (r.already_nominated) {
+      action = `<span class="text-muted small">Already nominated${r.existing_nominated_by ? ' by ' + esc(r.existing_nominated_by) : ''}</span>`;
+    } else {
+      action = `<button class="btn btn-sm btn-outline-success" data-prev-add="${i}">Add</button>`;
+    }
+    h += `<tr>
+      <td class="ps-3">${esc(r.name)}</td>
+      <td>${esc(alias)}</td>
+      <td>${esc(r.designation) || '-'}</td>
+      <td class="text-end pe-3">${action}</td>
+    </tr>`;
+  });
+  body.innerHTML = h + '</tbody></table>';
+}
+
+async function addFromPrev(row) {
+  const res = await fetch(withToken('/nps/nominate/submit'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      org_id: orgSelect.value,
+      stakeholder_alias: aliasOf(row.email),
+      name: row.name,
+      designation: row.designation || '',
+    }),
+  });
+  const data = await res.json();
+  return res.status === 201
+    ? { ok: true }
+    : { ok: false, duplicate: res.status === 409, existing: (data.existing || {}), error: data.error };
+}
+
+async function addAllFromPrev() {
+  const available = prevRows.filter(r => !r.already_nominated);
+  if (!available.length) { showAlert('warning', 'Nothing left to add — all responded stakeholders are already nominated.'); return; }
+  const btn = document.getElementById('prev-add-all-btn');
+  btn.disabled = true;
+  const res = await fetch(withToken('/nps/nominate/bulk-submit'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      org_id: orgSelect.value,
+      stakeholders: available.map(r => ({
+        stakeholder_alias: aliasOf(r.email), name: r.name, designation: r.designation || '',
+      })),
+    }),
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  if (res.ok) {
+    showAlert('success', `Added ${data.added.length}, skipped ${data.duplicates.length} duplicate(s), ${data.errors.length} error(s).`);
+    refreshTable(); loadCounts(); loadPrev();
+  } else {
+    showAlert('danger', data.error || 'Bulk add failed.');
+  }
+}
+
+// ── Bulk add (paste) ─────────────────────────────────────────────
+function parseBulkInput(text) {
+  return (text || '').split('\n').map(line => {
+    const parts = line.split(',');
+    const alias = (parts[0] || '').trim();
+    const name = (parts[1] || '').trim();
+    return alias ? { stakeholder_alias: alias, name: name } : null;
+  }).filter(Boolean);
+}
+
+async function bulkAdd() {
+  const stakeholders = parseBulkInput(document.getElementById('bulk-input').value);
+  const result = document.getElementById('bulk-result');
+  if (!stakeholders.length) { result.innerHTML = '<div class="alert alert-warning py-2 m-0">Paste at least one alias.</div>'; return; }
+  const btn = document.getElementById('bulk-add-btn');
+  btn.disabled = true;
+  const res = await fetch(withToken('/nps/nominate/bulk-submit'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ org_id: orgSelect.value, stakeholders: stakeholders }),
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  if (!res.ok) { result.innerHTML = `<div class="alert alert-danger py-2 m-0">${esc(data.error || 'Bulk add failed.')}</div>`; return; }
+  let h = `<div class="alert alert-info py-2">Added <strong>${data.added.length}</strong>, `
+    + `skipped <strong>${data.duplicates.length}</strong> duplicate(s), `
+    + `<strong>${data.errors.length}</strong> error(s).</div>`;
+  if (data.duplicates.length) {
+    h += '<div class="small text-muted">Duplicates: ' + data.duplicates.map(d =>
+      `${esc(d.alias)}${d.existing_nominated_by ? ' (by ' + esc(d.existing_nominated_by) + ')' : ''}`).join(', ') + '</div>';
+  }
+  if (data.errors.length) {
+    h += '<div class="small text-danger">Errors: ' + data.errors.map(e =>
+      `${esc(e.alias)}: ${esc(e.error)}`).join('; ') + '</div>';
+  }
+  result.innerHTML = h;
+  refreshTable(); loadCounts();
 }
 
 async function sendInvite() {
@@ -425,17 +708,63 @@ async function sendInvite() {
   }
 }
 
-orgSelect.addEventListener('change', () => { populateLeaders(); applyPrivilegeUI(); updateCycleInfo(); refreshTable(); loadViewer(); });
-leaderSelect.addEventListener('change', refreshTable);
+async function remindLeaders() {
+  const org = activeOrg() || {};
+  if (!confirm(`Send test email + Slack reminders to all leaders in ${org.org_name || 'this org'}?\n\nReminders are redirected to each leader's test alias where set.`)) return;
+  const btn = document.getElementById('remind-btn');
+  btn.disabled = true;
+  const res = await fetch(withToken('/nps/leaders/remind'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ org_id: orgSelect.value }),
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  if (res.ok) {
+    showAlert('success', `Reminders sent — email: <strong>${data.email_sent}</strong>, Slack: <strong>${data.slack_sent}</strong> of ${data.reminders.length} leader(s).`);
+  } else {
+    showAlert('danger', data.error || 'Could not send reminders.');
+  }
+}
+
+orgSelect.addEventListener('change', () => { populateLeaders(); applyPrivilegeUI(); updateCycleInfo(); loadCounts(); loadViewer(); });
+document.getElementById('remind-btn').addEventListener('click', remindLeaders);
+leaderSelect.addEventListener('change', () => { updateAddButtons(); refreshTable(); });
 document.getElementById('stakeholder-alias').addEventListener('blur', onStakeholderBlur);
 document.getElementById('invite-send-btn').addEventListener('click', sendInvite);
 document.getElementById('submit-btn').addEventListener('click', submitNomination);
+document.getElementById('prev-btn').addEventListener('click', loadPrev);
+document.getElementById('prev-add-all-btn').addEventListener('click', addAllFromPrev);
+document.getElementById('bulk-btn').addEventListener('click', () => {
+  document.getElementById('bulk-leader-name').textContent = myLeader || '(your leader)';
+  document.getElementById('bulk-result').innerHTML = '';
+});
+document.getElementById('bulk-add-btn').addEventListener('click', bulkAdd);
 // Delegated handler for per-row Remove buttons (replaces inline onclick,
 // which was injectable via the alias). The tbody element persists across
 // renderRows() innerHTML swaps, so one listener is enough.
 document.getElementById('nominations-body').addEventListener('click', (ev) => {
   const btn = ev.target.closest('button[data-remove-alias]');
   if (btn) removeNomination(btn.getAttribute('data-remove-alias'));
+});
+// Delegated handler for per-row "Add" buttons in the last-cycle modal.
+document.getElementById('prev-modal-body').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button[data-prev-add]');
+  if (!btn) return;
+  const row = prevRows[parseInt(btn.getAttribute('data-prev-add'), 10)];
+  if (!row) return;
+  btn.disabled = true; btn.textContent = 'Adding…';
+  const r = await addFromPrev(row);
+  if (r.ok) {
+    row.already_nominated = true; row.existing_nominated_by = viewer.alias;
+    renderPrev(); refreshTable(); loadCounts();
+  } else if (r.duplicate) {
+    row.already_nominated = true; row.existing_nominated_by = r.existing.nominated_by || '';
+    renderPrev();
+  } else {
+    showAlert('danger', r.error || 'Could not add.');
+    btn.disabled = false; btn.textContent = 'Add';
+  }
 });
 loadContext();
 </script>

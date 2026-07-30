@@ -355,6 +355,32 @@ def _is_privileged_for_org(org_id: str) -> bool:
     )
 
 
+def _viewer_resolved_leader(org_id: str) -> str:
+    """The leader the current viewer files under (system-resolved), or ''."""
+    viewer = getattr(g, "viewer_alias", "") or ""
+    if not viewer:
+        return ""
+    person = nps_nomination_service.lookup_person(org_id, viewer)
+    return ((person or {}).get("leader") or "").strip()
+
+
+def _viewer_owns_leader(org_id: str, leader: str) -> bool:
+    """Whether the viewer files under this leader (a direct), or is privileged.
+
+    Used for the last-cycle carry-forward list: a nominator may see the
+    prior cycle's responded stakeholders under THEIR OWN resolved leader
+    (so they can re-nominate them), and admins/editors/roster leaders may
+    see any leader's. This does NOT grant access to the current-cycle
+    who-nominated-whom list, which stays privileged (see nominate_list) —
+    a nomination is gauged at the leader level, so the roster leader and
+    admins/editors own that detail, not the directs.
+    """
+    if _is_privileged_for_org(org_id):
+        return True
+    resolved = _viewer_resolved_leader(org_id)
+    return bool(resolved) and resolved == (leader or "").strip()
+
+
 @nps_bp.route("/leaders", methods=["GET"])
 @login_required
 def list_leaders():
@@ -376,10 +402,57 @@ def add_leader():
             alias=data.get("alias", ""),
             name=data.get("name", ""),
             org_id=data.get("org_id", ""),
+            notify_alias=data.get("notify_alias", ""),
         )
         return jsonify(leader), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@nps_bp.route("/leaders/set-notify", methods=["POST"])
+@role_required("admin", "editor")
+def set_leader_notify():
+    """Set/clear a leader's reminder redirect (test) alias."""
+    try:
+        data = request.json or {}
+        alias = data.get("alias", "")
+        if not alias:
+            return jsonify({"error": "alias is required"}), 400
+        result = nps_leader_service.set_notify_alias(alias, data.get("notify_alias", ""))
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@nps_bp.route("/leaders/remind", methods=["POST"])
+@role_required("admin", "editor")
+def remind_leaders():
+    """Send email + Slack DM reminders to an org's roster leaders.
+
+    Each reminder is redirected to the leader's test alias (notify_alias)
+    when set. Body: {org_id, note?, channels?} where channels is an optional
+    subset of ["email", "slack"] (defaults to both).
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        if not org_id:
+            return jsonify({"error": "org_id is required"}), 400
+        channels = data.get("channels") or ["email", "slack"]
+        if not isinstance(channels, list) or not set(channels) <= {"email", "slack"}:
+            return jsonify({"error": "channels must be a subset of ['email','slack']"}), 400
+        result = nps_leader_service.send_leader_reminders(
+            base_url=request.host_url,
+            org_id=org_id,
+            note=data.get("note", ""),
+            channels=tuple(channels),
+        )
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error sending leader reminders")
+        return jsonify({"error": str(exc)}), 500
 
 
 @nps_bp.route("/leaders/remove", methods=["POST"])
@@ -526,9 +599,11 @@ def nominate_list():
         if mismatch:
             return mismatch
         if not _is_privileged_for_org(org_id):
-            # Nomination lists are visible only to admins/editors and the
-            # org's roster leaders; regular nominators learn about existing
-            # rows only through the duplicate-conflict response on submit.
+            # The current-cycle who-nominated-whom list stays privileged:
+            # nominations are gauged at the leader level, so only the roster
+            # leader and admins/editors see the detail. Directs learn of an
+            # existing nomination only via the duplicate-conflict response
+            # (submit) or the carry-forward list's "already nominated" flag.
             return jsonify({"error": "Nomination lists are visible to admins and org leaders only"}), 403
         cycle = nps_cycle_service.get_active_cycle(org_id)
         if not cycle:
@@ -648,6 +723,118 @@ def nominate_remove():
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         logger.exception("Error removing nomination")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/nominate/leader-counts", methods=["GET"])
+@login_or_share_token
+def nominate_leader_counts():
+    """Per-leader nomination COUNTS for the active cycle (numbers only).
+
+    Visible to anyone who can open the org's nomination page — it exposes
+    no nominee or nominator identities, just a count per leader.
+    """
+    try:
+        org_id = request.args.get("org_id", "")
+        if not org_id:
+            return jsonify({"error": "org_id query param is required"}), 400
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
+        cycle = nps_cycle_service.get_active_cycle(org_id)
+        if not cycle:
+            return jsonify({"cycle_id": "", "leaders": []})
+        return jsonify({
+            "cycle_id": cycle.cycle_id,
+            "leaders": nps_nomination_service.count_nominations_by_leader(
+                org_id, cycle.cycle_id
+            ),
+        })
+    except Exception as exc:
+        logger.exception("Error counting nominations by leader")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/nominate/previous", methods=["GET"])
+@login_or_share_token
+def nominate_previous():
+    """Prior closed cycle's RESPONDED stakeholders under a leader.
+
+    Same visibility rule as the current-cycle list (own leader / privileged).
+    Each row is annotated with whether it's already nominated this cycle so
+    the UI can disable "Add" and name the existing nominator.
+    """
+    try:
+        org_id = request.args.get("org_id", "")
+        leader = request.args.get("leader", "")
+        if not org_id or not leader:
+            return jsonify({"error": "org_id and leader query params are required"}), 400
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
+        if not _viewer_owns_leader(org_id, leader):
+            return jsonify({"error": "You can only carry forward under your own leader"}), 403
+        cycle = nps_cycle_service.get_active_cycle(org_id)
+        if not cycle:
+            return jsonify({"error": "No active survey cycle for this org"}), 400
+        return jsonify(
+            nps_nomination_service.list_prior_cycle_responded(
+                org_id, cycle.cycle_id, leader
+            )
+        )
+    except Exception as exc:
+        logger.exception("Error listing prior-cycle nominations")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/nominate/bulk-submit", methods=["POST"])
+@login_or_share_token
+def nominate_bulk_submit():
+    """Nominate multiple stakeholders at once under the nominator's leader.
+
+    Body: {org_id, stakeholders: [{stakeholder_alias, name, designation}]}.
+    Identity and leader are resolved server-side exactly like single submit
+    (never client-chosen). Returns a per-row {added, duplicates, errors}.
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        mismatch = _share_org_mismatch(org_id)
+        if mismatch:
+            return mismatch
+        cycle = nps_cycle_service.get_active_cycle(org_id) if org_id else None
+        if not cycle:
+            return jsonify({"error": "No active survey cycle for this org"}), 400
+
+        nominator = getattr(g, "viewer_alias", "") or ""
+        if not nominator:
+            return jsonify({"error": "Could not establish your identity"}), 401
+
+        # Leader is the nominator's own resolved leader — never client-chosen.
+        person = nps_nomination_service.lookup_person(org_id, nominator)
+        leader = (person or {}).get("leader", "")
+        if not leader:
+            return jsonify({
+                "error": "Could not determine your leader for this org — "
+                         "ask an org admin to add you or your leader to the roster"
+            }), 400
+
+        stakeholders = data.get("stakeholders", [])
+        if not isinstance(stakeholders, list) or not stakeholders:
+            return jsonify({"error": "stakeholders must be a non-empty list"}), 400
+
+        result = nps_nomination_service.bulk_nominate_stakeholders(
+            org_id=org_id,
+            cycle_id=cycle.cycle_id,
+            leader=leader,
+            nominated_by=nominator,
+            stakeholders=stakeholders,
+        )
+        return jsonify(result), 200
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error bulk-submitting nominations")
         return jsonify({"error": str(exc)}), 500
 
 
