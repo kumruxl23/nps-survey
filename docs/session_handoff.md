@@ -61,9 +61,23 @@ GitFarm mainline, CR pending (top priority)**.
    auto-completes → Resolve Required Issues → SELF-certify (Yellow needs
    no external certifier — Sri confirmed; he's informed). Then paste
    engagement ARN into Slack install request → AmazonUC-SIGNAL unblocks.
-4. ERB scoping questionnaire (SIM 40fc8061-...) — fill + upload + tag
-   @souzaja. Deployment is IN/US/CA (non-ERB) → expect out-of-scope;
-   5-6 week clock, non-blocking.
+4. ERB scoping questionnaire (ERB-3324 / V2300729846, child of privacy
+   HRPRP-58885; tag @souzaja). **SCOPE CORRECTED 2026-07-26: this is
+   GLOBAL, not IN/US/CA.** Data subjects are WHS/FC stakeholders across
+   Amazon Operations sites worldwide, so EU/ERB countries ARE in scope
+   (Germany, France, Poland, Italy, Spain, etc. all have FCs). Earlier
+   "non-ERB / expect out-of-scope" assumption is WRONG — expect actual
+   ERB engagement on its own pan-Amazon timeline. Filled questionnaire
+   generated: `ERB_Questionnaire_nps-survey_Filled.docx` (repo root) —
+   answered for global footprint; still has [CONFIRM] placeholders
+   (business-line selections, total + per-ERB-country headcounts for
+   data subjects & users, levels/job families, whether any Tier-1/
+   associate-level subjects, 2 screenshots). NEXT: fill placeholders →
+   upload to ERB-3324 → move SIM to "Scoping Template In-Progress" →
+   tag @souzaja. Does NOT block the Yellow ASR self-cert, BUT it DOES
+   gate launching in ERB countries (5-6 wk scoping clock, then possible
+   works-council engagement). Also seek BLL + Labor & Employment Legal
+   assessment per the AutoSIM note.
 5. Data Dictionary Review SIM HRPRP-58884: "Out of Scope/No Data"
    comment posted (survey-tool criterion); change workflow step to
    Specialist Review if editable; non-blocking either way.

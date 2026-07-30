@@ -80,9 +80,15 @@ themselves. Works identically for any org once its roster is entered.
       Kale-only — SLAB not in FPDS source catalog).
 - [x] **Privacy review: GREEN LIGHT** (no DPIA; auto-approved except ERB
       countries). SIM 65afe819-3c61-460c-a051-2f577949870f.
-- [ ] ERB scoping questionnaire (SIM 40fc8061-b0c4-421b-8c4c-c6e3a912a923,
-      tag @souzaja) — deployment is IN/US/CA only (non-ERB), expect out
-      of scope; 5-6 week clock, non-blocking for current launch.
+- [ ] ERB scoping questionnaire (ERB-3324 / V2300729846, tag @souzaja).
+      SCOPE CORRECTED 2026-07-26: GLOBAL, not IN/US/CA. WHS CPT works with
+      WHS/FC stakeholders at Ops sites worldwide, so EU/ERB countries ARE
+      in scope. Filled doc: ERB_Questionnaire_nps-survey_Filled.docx (repo
+      root) with [CONFIRM] placeholders (business lines, per-ERB-country
+      headcounts, levels/job families, Tier-1 inclusion, screenshots).
+      Expect real ERB engagement on a pan-Amazon timeline; gates launch in
+      ERB countries but not the Yellow ASR self-cert. Seek BLL + Labor &
+      Employment Legal assessment per AutoSIM note.
 - [x] UBX submitted → auto-onboarded SAME DAY (gamma + prod). SIM
       V2300729875 (resolved) has the role ARNs. Allowlisted op:
       employeeV2ByLogin; account 399016860083.
@@ -98,7 +104,8 @@ themselves. Works identically for any org once its roster is entered.
 - [x] papi_client.py + single-call chain resolution + tests (370 green)
 - [ ] Leader rosters per org (ONLY remaining blocker for leader
       auto-select — chain data verified flowing)
-- [ ] ERB questionnaire (SIM 40fc8061, non-blocking for IN/NA launch)
+- [ ] ERB questionnaire (ERB-3324) — GLOBAL scope (see above); gates
+      ERB-country launch only, not the ASR self-cert
 - [ ] DI threat model updated + published (add PAPI internal boundary)
       — copy/paste kit ready in `docs/papi_threat_model_delta.md`; drawio
       already updated with the PAPI internal boundary + flow.
