@@ -186,7 +186,7 @@ def send_nomination_invite(base_url: str, deadline: str, note: str = "", org_id:
     if not leaders:
         raise ValueError("The leader roster is empty — add leaders first")
 
-    token = nps_share_link_service.get_or_create_token(org_id)
+    token = nps_share_link_service.get_or_create_common_token()
     link = f"{base_url.rstrip('/')}/nps/nominate/view?token={token}"
 
     subject = f"Action needed: nominate your NPS survey stakeholders by {deadline}"
@@ -222,6 +222,15 @@ def _recipient_alias(leader: dict) -> str:
     return (leader.get("notify_alias") or leader.get("alias") or "").strip().lower()
 
 
+def _slack_sender_name() -> str:
+    """Custom Slack DM sender display name (chat:write.customize).
+
+    Set ``NPS_SLACK_SENDER_NAME`` to make DMs read as a person/team (e.g.
+    "Vinay Jain") instead of the app's default. Empty = app default name.
+    """
+    return os.environ.get("NPS_SLACK_SENDER_NAME", "").strip()
+
+
 def _reminder_subject(cycle_name: str = "") -> str:
     tail = f" ({cycle_name})" if cycle_name else ""
     return f"[NPS Survey] Reminder: nominate your stakeholders{tail}"
@@ -253,6 +262,204 @@ def _build_leader_reminder_slack(leader_name: str, link: str, note: str) -> str:
     return msg + (f"\n{note}" if note else "")
 
 
+def _nomination_open_subject(cycle_name: str = "") -> str:
+    tail = f" ({cycle_name})" if cycle_name else ""
+    return f"[NPS Survey] Nominations are now open{tail}"
+
+
+def _build_nomination_open_email(leader_name: str, link: str, deadline: str, note: str) -> str:
+    """PLACEHOLDER "nominations opened" email body (HTML). Copy TBD later."""
+    import html
+
+    safe_name = html.escape(leader_name or "there")
+    deadline_html = (
+        f"<p><strong>Deadline: {html.escape(deadline)}</strong></p>" if deadline else ""
+    )
+    note_html = f"<p>{html.escape(note)}</p>" if note else ""
+    return (
+        f"<p>Hi {safe_name},</p>"
+        "<p>[TEMPLATE PLACEHOLDER] Nominations for the NPS survey are now "
+        "<strong>OPEN</strong>. Please nominate the stakeholders from your "
+        "team who should receive the survey this cycle, using the form "
+        "below. Your directs can also nominate on your behalf by selecting "
+        "your name as the leader.</p>"
+        f'<p><a href="{link}">Open the nomination form</a></p>'
+        f"{deadline_html}"
+        f"{note_html}"
+        "<p>Thank you!</p>"
+    )
+
+
+def _build_nomination_open_slack(leader_name: str, link: str, deadline: str, note: str) -> str:
+    """PLACEHOLDER "nominations opened" Slack DM text. Copy TBD later."""
+    msg = (
+        f"Hi {leader_name or 'there'}, [TEMPLATE PLACEHOLDER] nominations "
+        f"for the NPS survey are now OPEN. Please nominate your team's "
+        f"stakeholders this cycle.\nOpen the form: {link}"
+    )
+    if deadline:
+        msg += f"\nDeadline: {deadline}"
+    if note:
+        msg += f"\n{note}"
+    return msg
+
+
+def send_nomination_open(
+    base_url: str,
+    org_id: str,
+    deadline: str = "",
+    note: str = "",
+    channels: tuple = ("email", "slack"),
+) -> dict:
+    """Notify an org's roster leaders that nominations have OPENED.
+
+    A kickoff announcement (distinct from the periodic reminder): email +
+    Slack DM to each leader when a nomination cycle begins. Reuses the same
+    delivery rules as reminders — each notification goes to the leader's
+    ``notify_alias`` (TEST redirect) when set, Slack uses the org's bot
+    token from OrgConfig (skipped + reported per row when missing), and
+    demo-safe mode (``NPS_DEMO_SAFE``) blocks sends to leaders WITHOUT a
+    test redirect so real leaders are never contacted during testing.
+
+    Returns:
+        {org_id, link, deadline, email_sent, slack_sent, notifications: [
+            {leader, recipient_alias, email_ok, slack_ok, errors}
+        ]}
+    """
+    from app.services import (
+        email_client,
+        nps_org_config_service,
+        nps_share_link_service,
+        slab_client,
+        slack_client,
+    )
+
+    org_id = (org_id or "").strip()
+    if not org_id:
+        raise ValueError("org_id is required — notifications are sent per org")
+    deadline = (deadline or "").strip()
+    leaders = list_leaders(org_id)
+    if not leaders:
+        raise ValueError("The leader roster is empty — add leaders first")
+
+    token = nps_share_link_service.get_or_create_common_token()
+    link = f"{base_url.rstrip('/')}/nps/nominate/view?token={token}"
+    from_address = os.environ.get("NPS_FROM_ADDRESS", "")
+
+    org = next(
+        (o for o in nps_org_config_service.list_all_orgs() if o.org_id == org_id),
+        None,
+    )
+    bot_token = (getattr(org, "slack_bot_token", "") if org else "") or ""
+
+    want_email = "email" in channels
+    want_slack = "slack" in channels
+    demo = _demo_safe()
+    subject = _nomination_open_subject()
+    notifications = []
+
+    for leader in leaders:
+        recipient = _recipient_alias(leader)
+        overridden = bool(leader.get("notify_alias"))
+        row = {
+            "leader": leader["name"],
+            "recipient_alias": recipient,
+            "email_ok": False,
+            "slack_ok": False,
+            "errors": [],
+        }
+
+        if demo and not overridden:
+            row["errors"].append("skipped: demo-safe on and no test alias set")
+            notifications.append(row)
+            continue
+        if not recipient:
+            row["errors"].append("no recipient alias")
+            notifications.append(row)
+            continue
+
+        recipient_email = f"{recipient}@amazon.com"
+
+        if want_email:
+            result = email_client.send_bcc_email(
+                subject,
+                _build_nomination_open_email(leader["name"], link, deadline, note),
+                [recipient_email],
+                from_address,
+            )
+            row["email_ok"] = result.ok
+            if not result.ok:
+                row["errors"].append(f"email: {result.error}")
+
+        if want_slack:
+            if not bot_token:
+                row["errors"].append("slack: no bot token configured for this org")
+            else:
+                try:
+                    # Resolve Slack ID via SLAB (no users:read scope needed).
+                    user_id = slab_client.lookup_slack_id_by_alias(recipient)
+                    dm = slack_client.send_dm(
+                        user_id,
+                        _build_nomination_open_slack(leader["name"], link, deadline, note),
+                        bot_token,
+                        username=_slack_sender_name(),
+                    )
+                    row["slack_ok"] = dm.ok
+                    if not dm.ok:
+                        row["errors"].append(f"slack: {dm.error}")
+                except slab_client.SlackUserNotFoundError as exc:
+                    row["errors"].append(f"slack: {exc}")
+                except Exception as exc:  # SLAB config/transport/other — never break the batch
+                    row["errors"].append(f"slack: {exc}")
+
+        notifications.append(row)
+
+    logger.info(
+        "Nomination-open notification: org=%s email_sent=%d slack_sent=%d",
+        org_id,
+        sum(1 for r in notifications if r["email_ok"]),
+        sum(1 for r in notifications if r["slack_ok"]),
+    )
+    return {
+        "org_id": org_id,
+        "link": link,
+        "deadline": deadline,
+        "email_sent": sum(1 for r in notifications if r["email_ok"]),
+        "slack_sent": sum(1 for r in notifications if r["slack_ok"]),
+        "notifications": notifications,
+    }
+
+
+def check_slack_resolution(alias: str) -> dict:
+    """Diagnose the SLAB alias→Slack-ID half of the DM path (read-only).
+
+    Resolves ``alias`` to a Slack user ID via SLAB, WITHOUT needing a Slack
+    bot token — so the SLAB integration can be verified independently of the
+    (still-pending) ``chat:write`` app token. Intended for a quick admin
+    "does Slack resolution work on this host?" check after deploy, since SLAB
+    only accepts the allowlisted EC2 role.
+
+    Returns ``{alias, ok, slack_id, error}`` — never raises; a failure is
+    reported in ``error`` (not-configured, not-found, or transport).
+    """
+    alias = _normalize_alias(alias)
+    row = {"alias": alias, "ok": False, "slack_id": "", "error": ""}
+    if not alias:
+        row["error"] = "alias is required"
+        return row
+
+    from app.services import slab_client
+
+    try:
+        row["slack_id"] = slab_client.lookup_slack_id_by_alias(alias)
+        row["ok"] = True
+    except slab_client.SlackUserNotFoundError as exc:
+        row["error"] = f"not found: {exc}"
+    except Exception as exc:  # config/transport — surface, don't raise
+        row["error"] = str(exc)
+    return row
+
+
 def send_leader_reminders(
     base_url: str,
     org_id: str,
@@ -277,6 +484,7 @@ def send_leader_reminders(
         email_client,
         nps_org_config_service,
         nps_share_link_service,
+        slab_client,
         slack_client,
     )
 
@@ -287,7 +495,7 @@ def send_leader_reminders(
     if not leaders:
         raise ValueError("The leader roster is empty — add leaders first")
 
-    token = nps_share_link_service.get_or_create_token(org_id)
+    token = nps_share_link_service.get_or_create_common_token()
     link = f"{base_url.rstrip('/')}/nps/nominate/view?token={token}"
     from_address = os.environ.get("NPS_FROM_ADDRESS", "")
 
@@ -340,18 +548,20 @@ def send_leader_reminders(
                 row["errors"].append("slack: no bot token configured for this org")
             else:
                 try:
-                    user_id = slack_client.lookup_user_by_email(recipient_email, bot_token)
+                    # Resolve Slack ID via SLAB (no users:read scope needed).
+                    user_id = slab_client.lookup_slack_id_by_alias(recipient)
                     dm = slack_client.send_dm(
                         user_id,
                         _build_leader_reminder_slack(leader["name"], link, note),
                         bot_token,
+                        username=_slack_sender_name(),
                     )
                     row["slack_ok"] = dm.ok
                     if not dm.ok:
                         row["errors"].append(f"slack: {dm.error}")
-                except slack_client.SlackUserNotFoundError as exc:
+                except slab_client.SlackUserNotFoundError as exc:
                     row["errors"].append(f"slack: {exc}")
-                except Exception as exc:  # transport/other — never break the batch
+                except Exception as exc:  # SLAB config/transport/other — never break the batch
                     row["errors"].append(f"slack: {exc}")
 
         reminders.append(row)
@@ -362,4 +572,133 @@ def send_leader_reminders(
         "email_sent": sum(1 for r in reminders if r["email_ok"]),
         "slack_sent": sum(1 for r in reminders if r["slack_ok"]),
         "reminders": reminders,
+    }
+
+
+def _build_response_summary_email(leader_name: str, count: int, link: str) -> str:
+    import html
+    safe = html.escape(leader_name or "there")
+    return (
+        f"<p>Hi {safe},</p>"
+        f"<p>Quick NPS survey update: <strong>{count}</strong> response"
+        f"{'' if count == 1 else 's'} received so far this cycle.</p>"
+        f'<p><a href="{link}">Open the dashboard</a> for the live breakdown.</p>'
+        "<p>Thank you!</p>"
+    )
+
+
+def _build_response_summary_slack(leader_name: str, count: int, link: str) -> str:
+    return (
+        f"Hi {leader_name or 'there'}, NPS survey update: *{count}* response"
+        f"{'' if count == 1 else 's'} received so far this cycle.\n{link}"
+    )
+
+
+def send_response_summary(
+    base_url: str,
+    org_id: str,
+    cycle_id: str,
+    channels: tuple = ("email", "slack"),
+) -> dict:
+    """Email + Slack DM each roster leader the count of responses so far.
+
+    The count comes from the existing live response-count source
+    (``nps_asana_dashboard_service.get_dashboard_summary``). Reuses the same
+    per-leader delivery rules as ``send_leader_reminders`` (notify_alias TEST
+    redirect, org Slack bot token, demo-safe gate, per-row error capture).
+
+    Returns {org_id, cycle_id, response_count, email_sent, slack_sent, notifications}.
+    """
+    from app.services import (
+        email_client,
+        nps_asana_dashboard_service,
+        nps_org_config_service,
+        slab_client,
+        slack_client,
+    )
+
+    org_id = (org_id or "").strip()
+    cycle_id = (cycle_id or "").strip()
+    if not org_id or not cycle_id:
+        raise ValueError("org_id and cycle_id are required")
+    leaders = list_leaders(org_id)
+    if not leaders:
+        raise ValueError("The leader roster is empty — add leaders first")
+
+    try:
+        summary = nps_asana_dashboard_service.get_dashboard_summary(org_id, cycle_id)
+        response_count = int(summary.get("total_responses", 0))
+    except Exception:
+        response_count = 0
+
+    link = f"{base_url.rstrip('/')}/nps/dashboard"
+    from_address = os.environ.get("NPS_FROM_ADDRESS", "")
+
+    org = next(
+        (o for o in nps_org_config_service.list_all_orgs() if o.org_id == org_id),
+        None,
+    )
+    bot_token = (getattr(org, "slack_bot_token", "") if org else "") or ""
+
+    want_email = "email" in channels
+    want_slack = "slack" in channels
+    demo = _demo_safe()
+    subject = f"[NPS Survey] {response_count} responses received so far"
+    notifications = []
+
+    for leader in leaders:
+        recipient = _recipient_alias(leader)
+        overridden = bool(leader.get("notify_alias"))
+        row = {"leader": leader["name"], "recipient_alias": recipient,
+               "email_ok": False, "slack_ok": False, "errors": []}
+
+        if demo and not overridden:
+            row["errors"].append("skipped: demo-safe on and no test alias set")
+            notifications.append(row)
+            continue
+        if not recipient:
+            row["errors"].append("no recipient alias")
+            notifications.append(row)
+            continue
+
+        if want_email:
+            result = email_client.send_bcc_email(
+                subject,
+                _build_response_summary_email(leader["name"], response_count, link),
+                [f"{recipient}@amazon.com"],
+                from_address,
+            )
+            row["email_ok"] = result.ok
+            if not result.ok:
+                row["errors"].append(f"email: {result.error}")
+
+        if want_slack:
+            if not bot_token:
+                row["errors"].append("slack: no bot token configured for this org")
+            else:
+                try:
+                    user_id = slab_client.lookup_slack_id_by_alias(recipient)
+                    dm = slack_client.send_dm(
+                        user_id,
+                        _build_response_summary_slack(leader["name"], response_count, link),
+                        bot_token,
+                        username=_slack_sender_name(),
+                    )
+                    row["slack_ok"] = dm.ok
+                    if not dm.ok:
+                        row["errors"].append(f"slack: {dm.error}")
+                except slab_client.SlackUserNotFoundError as exc:
+                    row["errors"].append(f"slack: {exc}")
+                except Exception as exc:
+                    row["errors"].append(f"slack: {exc}")
+
+        notifications.append(row)
+
+    return {
+        "org_id": org_id,
+        "cycle_id": cycle_id,
+        "response_count": response_count,
+        "email_sent": sum(1 for r in notifications if r["email_ok"]),
+        "slack_sent": sum(1 for r in notifications if r["slack_ok"]),
+        "notifications": notifications,
     }

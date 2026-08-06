@@ -312,10 +312,15 @@ class TestInitScheduler:
             mock_instance = MockSched.return_value
             scheduler = init_scheduler(app)
 
-            mock_instance.add_job.assert_called_once()
-            call_kwargs = mock_instance.add_job.call_args
-            trigger = call_kwargs.kwargs.get("trigger") or call_kwargs[1].get("trigger")
-            assert trigger.interval.total_seconds() == 30 * 60
+            # Two jobs are registered: reminder check + phase send.
+            assert mock_instance.add_job.call_count == 2
+            job_ids = {
+                c.kwargs.get("id") for c in mock_instance.add_job.call_args_list
+            }
+            assert job_ids == {"nps_reminder_check", "nps_phase_send"}
+            for c in mock_instance.add_job.call_args_list:
+                trigger = c.kwargs.get("trigger")
+                assert trigger.interval.total_seconds() == 30 * 60
             mock_instance.start.assert_called_once()
             assert scheduler is mock_instance
 

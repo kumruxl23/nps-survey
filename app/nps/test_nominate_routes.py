@@ -151,8 +151,12 @@ class TestNominateListAndContext:
         assert body["orgs"][0]["leaders"] == [
             {"alias": "nsbhatia", "name": "Navjyot Bhatia", "org_id": "", "notify_alias": ""}
         ]
-        assert body["locked_org"] is None
+        # direct1 (editor, NOT admin) resolves to org_alpha via history,
+        # so the context arrives pinned to that home org.
+        assert body["locked_org"] == _ORG
+        assert body["default_org"] == _ORG
         assert body["viewer"]["alias"] == "direct1"
+        assert body["viewer"]["can_switch_org"] is False
         assert body["viewer"]["privileged_orgs"][_ORG] is True  # editor
 
     def test_viewer_is_not_privileged(self, client):
@@ -262,34 +266,36 @@ class TestShareLink:
         with client.session_transaction() as sess:
             sess["user"] = {"username": "admin", "role": "admin", "display_name": "A"}
 
-    def _get_token(self, client, org=_ORG):
+    def _get_token(self, client):
         self._admin(client)
         resp = client.get("/nps/nominate/context")
-        share_path = resp.get_json()["share_paths"][org]
+        share_path = resp.get_json()["share_path"]
         self._logout(client)
         return share_path.split("token=", 1)[1]
 
-    def test_admin_context_includes_share_paths(self, client):
+    def test_admin_context_includes_share_path(self, client):
         self._admin(client)
         body = client.get("/nps/nominate/context").get_json()
-        assert body["share_paths"][_ORG].startswith("/nps/nominate/view?token=")
+        assert body["share_path"].startswith("/nps/nominate/view?token=")
 
-    def test_viewer_context_has_no_share_paths(self, client):
+    def test_viewer_context_has_no_share_path(self, client):
         _set_user(client, "someguy", "viewer")
         body = client.get("/nps/nominate/context").get_json()
-        assert "share_paths" not in body
+        assert "share_path" not in body
 
     def test_token_grants_form_access_without_login(self, client, monkeypatch):
         token = self._get_token(client)
         # Page renders
         resp = client.get(f"/nps/nominate/view?token={token}")
         assert resp.status_code == 200
-        # Context works, is locked to the org, and never leaks share links
+        # Context works and never leaks share links. The COMMON token is
+        # org-agnostic: no token-side lock (the viewer's org is resolved
+        # from their identity instead).
         resp = client.get(f"/nps/nominate/context?token={token}")
         assert resp.status_code == 200
         body = resp.get_json()
-        assert "share_paths" not in body
-        assert body["locked_org"] == _ORG
+        assert "share_path" not in body
+        assert body["locked_org"] is None
         assert [o["org_id"] for o in body["orgs"]] == [_ORG]
         # Submit works — identity comes from the ALB header (Midway mode);
         # roster leader nsbhatia nominates, resolving to themselves.
@@ -325,7 +331,8 @@ class TestShareLink:
     def test_rotate_invalidates_old_token(self, client):
         token = self._get_token(client)
         self._admin(client)
-        resp = client.post("/nps/nominate/share-link/rotate", json={"org_id": _ORG})
+        # No org_id -> rotates the COMMON link.
+        resp = client.post("/nps/nominate/share-link/rotate", json={})
         assert resp.status_code == 200
         new_token = resp.get_json()["share_path"].split("token=", 1)[1]
         self._logout(client)
@@ -336,9 +343,11 @@ class TestShareLink:
         resp = client.post("/nps/nominate/share-link/rotate", json={"org_id": _ORG})
         assert resp.status_code == 403
 
-    def test_token_locked_to_its_org(self, client):
-        """A share token must not read or write another org's data."""
-        token = self._get_token(client)
+    def test_legacy_org_token_locked_to_its_org(self, client):
+        """A LEGACY per-org share token must not read or write another org's data."""
+        from app.services import nps_share_link_service
+        token = nps_share_link_service.rotate_token(_ORG)  # legacy org-locked row
+        self._logout(client)
         resp = client.get(
             f"/nps/nominate/list?org_id=other_org&leader=X&token={token}")
         assert resp.status_code == 403

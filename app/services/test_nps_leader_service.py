@@ -131,9 +131,9 @@ class TestSendNominationInvite:
         assert result["sent_count"] == 2  # beta's leader NOT included
         _s, body, recipients, _f = mock_send.call_args[0]
         assert "beta1@amazon.com" not in recipients
-        # Link carries org_alpha's token, not org_beta's.
+        # Link carries the COMMON token — one link, org resolved per viewer.
         from app.services import nps_share_link_service
-        assert nps_share_link_service.get_or_create_token(self._ORG) in body
+        assert nps_share_link_service.get_or_create_common_token() in body
 
     def test_requires_org(self, ddb_table):
         self._roster()
@@ -199,7 +199,7 @@ class TestNotifyAlias:
 
 class TestSendLeaderReminders:
     @patch("app.services.slack_client.send_dm")
-    @patch("app.services.slack_client.lookup_user_by_email")
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
     @patch("app.services.email_client.send_bcc_email")
     def test_reminders_redirect_to_test_alias(self, mock_email, mock_lookup, mock_dm, ddb_table):
         from app.db.models import EmailResult, SlackResult
@@ -219,8 +219,9 @@ class TestSendLeaderReminders:
         emailed = [call.args[2][0] for call in mock_email.call_args_list]
         assert "kumruxl@amazon.com" in emailed and "kuvinu@amazon.com" in emailed
         assert "nsbhatia@amazon.com" not in emailed
+        # SLAB is queried by ALIAS (no email, no users:read).
         looked = [call.args[0] for call in mock_lookup.call_args_list]
-        assert "kumruxl@amazon.com" in looked
+        assert "kumruxl" in looked and "nsbhatia" not in looked
 
     @patch("app.services.email_client.send_bcc_email")
     def test_no_slack_token_reports_and_still_emails(self, mock_email, ddb_table):
@@ -254,3 +255,151 @@ class TestSendLeaderReminders:
         _put_org(org_id="org_empty")
         with pytest.raises(ValueError, match="roster is empty"):
             nps_leader_service.send_leader_reminders("http://localhost/", "org_empty")
+
+
+class TestSendNominationOpen:
+    @patch("app.services.slack_client.send_dm")
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
+    @patch("app.services.email_client.send_bcc_email")
+    def test_notifies_via_email_and_slack_redirected_to_test_alias(
+        self, mock_email, mock_lookup, mock_dm, ddb_table
+    ):
+        from app.db.models import EmailResult, SlackResult
+
+        _put_org(slack_bot_token="xoxb-test")
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        nps_leader_service.add_leader("raabhas", "Abhas Rao", org_id="org_alpha", notify_alias="kuvinu")
+        mock_email.return_value = EmailResult(ok=True)
+        mock_lookup.return_value = "U123"
+        mock_dm.return_value = SlackResult(ok=True)
+
+        result = nps_leader_service.send_nomination_open(
+            "http://localhost/", "org_alpha", deadline="2026-08-15"
+        )
+
+        assert result["email_sent"] == 2
+        assert result["slack_sent"] == 2
+        assert result["deadline"] == "2026-08-15"
+        assert len(result["notifications"]) == 2
+        # Went to TEST aliases, never the real leaders.
+        emailed = [call.args[2][0] for call in mock_email.call_args_list]
+        assert "kumruxl@amazon.com" in emailed and "kuvinu@amazon.com" in emailed
+        assert "nsbhatia@amazon.com" not in emailed
+        # Subject + body signal a kickoff (not a reminder).
+        subjects = [call.args[0] for call in mock_email.call_args_list]
+        assert all("now open" in s.lower() for s in subjects)
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_no_slack_token_reports_and_still_emails(self, mock_email, ddb_table):
+        from app.db.models import EmailResult
+
+        _put_org(slack_bot_token="")  # no Slack configured
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        mock_email.return_value = EmailResult(ok=True)
+
+        result = nps_leader_service.send_nomination_open("http://localhost/", "org_alpha")
+        assert result["email_sent"] == 1
+        assert result["slack_sent"] == 0
+        assert any("no bot token" in e for e in result["notifications"][0]["errors"])
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_demo_safe_skips_leaders_without_test_alias(self, mock_email, ddb_table, monkeypatch):
+        from app.db.models import EmailResult
+
+        _put_org()
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha")  # no redirect
+        monkeypatch.setenv("NPS_DEMO_SAFE", "1")
+        mock_email.return_value = EmailResult(ok=True)
+
+        result = nps_leader_service.send_nomination_open(
+            "http://localhost/", "org_alpha", channels=("email",)
+        )
+        assert result["email_sent"] == 0
+        assert "demo-safe" in result["notifications"][0]["errors"][0]
+
+    @patch("app.services.email_client.send_bcc_email")
+    def test_email_only_channel(self, mock_email, ddb_table):
+        from app.db.models import EmailResult
+
+        _put_org(slack_bot_token="xoxb-test")
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        mock_email.return_value = EmailResult(ok=True)
+
+        result = nps_leader_service.send_nomination_open(
+            "http://localhost/", "org_alpha", channels=("email",)
+        )
+        assert result["email_sent"] == 1
+        assert result["slack_sent"] == 0
+
+    def test_empty_roster_rejected(self, ddb_table):
+        _put_org(org_id="org_empty")
+        with pytest.raises(ValueError, match="roster is empty"):
+            nps_leader_service.send_nomination_open("http://localhost/", "org_empty")
+
+    def test_org_id_required(self, ddb_table):
+        with pytest.raises(ValueError, match="org_id is required"):
+            nps_leader_service.send_nomination_open("http://localhost/", "")
+
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
+    @patch("app.services.email_client.send_bcc_email")
+    def test_slab_failure_reported_per_row_email_still_ok(self, mock_email, mock_slab, ddb_table):
+        from app.db.models import EmailResult
+        from app.services import slab_client
+
+        _put_org(slack_bot_token="xoxb-test")
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        mock_email.return_value = EmailResult(ok=True)
+        # SLAB can't resolve — must be caught per row, never break the batch.
+        mock_slab.side_effect = slab_client.SlackUserNotFoundError("no mapping")
+
+        result = nps_leader_service.send_nomination_open("http://localhost/", "org_alpha")
+        assert result["email_sent"] == 1
+        assert result["slack_sent"] == 0
+        assert any("slack:" in e for e in result["notifications"][0]["errors"])
+
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
+    @patch("app.services.email_client.send_bcc_email")
+    def test_slab_not_configured_reported_per_row(self, mock_email, mock_slab, ddb_table):
+        from app.db.models import EmailResult
+
+        _put_org(slack_bot_token="xoxb-test")
+        nps_leader_service.add_leader("nsbhatia", "Navjyot Bhatia", org_id="org_alpha", notify_alias="kumruxl")
+        mock_email.return_value = EmailResult(ok=True)
+        # SLAB_ENDPOINT missing -> RuntimeError; batch must survive.
+        mock_slab.side_effect = RuntimeError("SLAB_ENDPOINT is not configured")
+
+        result = nps_leader_service.send_nomination_open("http://localhost/", "org_alpha")
+        assert result["email_sent"] == 1
+        assert result["slack_sent"] == 0
+        assert any("slack:" in e for e in result["notifications"][0]["errors"])
+
+
+class TestCheckSlackResolution:
+    """SLAB alias→Slack-ID diagnostic (read-only; no bot token needed)."""
+
+    def test_empty_alias_is_reported_not_raised(self):
+        row = nps_leader_service.check_slack_resolution("")
+        assert row["ok"] is False
+        assert "required" in row["error"]
+
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
+    def test_success_returns_slack_id(self, mock_slab):
+        mock_slab.return_value = "U12345"
+        row = nps_leader_service.check_slack_resolution("KumRuxl@amazon.com")
+        assert row == {"alias": "kumruxl", "ok": True, "slack_id": "U12345", "error": ""}
+
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
+    def test_not_found_reported(self, mock_slab):
+        from app.services import slab_client
+
+        mock_slab.side_effect = slab_client.SlackUserNotFoundError("no mapping")
+        row = nps_leader_service.check_slack_resolution("ghost")
+        assert row["ok"] is False
+        assert "not found" in row["error"]
+
+    @patch("app.services.slab_client.lookup_slack_id_by_alias")
+    def test_transport_error_reported_not_raised(self, mock_slab):
+        mock_slab.side_effect = RuntimeError("SLAB_ENDPOINT is not configured")
+        row = nps_leader_service.check_slack_resolution("kumruxl")
+        assert row["ok"] is False
+        assert "SLAB_ENDPOINT" in row["error"]

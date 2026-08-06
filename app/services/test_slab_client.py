@@ -51,11 +51,18 @@ class TestLookupSlackIdsByAliases:
 
     @patch("app.services.slab_client.requests.post")
     @patch("app.services.slab_client._signed_headers", return_value={"x-api-key": "k"})
-    def test_dict_results_shape(self, _sign, mock_post, monkeypatch):
+    def test_map_results_shape(self, _sign, mock_post, monkeypatch):
+        # Real SLAB contract: aliasToSlackIdMap list of {alias, slackId, isActive}
         monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": True, "slackIds": {"jdoe": "U1", "asmith": "U2"}}
+        mock_resp.json.return_value = {
+            "ok": True,
+            "aliasToSlackIdMap": [
+                {"alias": "jdoe", "slackId": "U1", "isActive": True},
+                {"alias": "asmith", "slackId": "U2", "isActive": True},
+            ],
+        }
         mock_post.return_value = mock_resp
 
         result = lookup_slack_ids_by_aliases(["JDoe", "asmith"])
@@ -63,13 +70,25 @@ class TestLookupSlackIdsByAliases:
 
     @patch("app.services.slab_client.requests.post")
     @patch("app.services.slab_client._signed_headers", return_value={})
-    def test_list_results_shape(self, _sign, mock_post, monkeypatch):
+    def test_dict_results_shape_tolerated(self, _sign, mock_post, monkeypatch):
+        # Defensive dict tolerance ({alias: id})
+        monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True, "aliasToSlackIdMap": {"jdoe": "U1"}}
+        mock_post.return_value = mock_resp
+
+        assert lookup_slack_ids_by_aliases(["jdoe"]) == {"jdoe": "U1"}
+
+    @patch("app.services.slab_client.requests.post")
+    @patch("app.services.slab_client._signed_headers", return_value={})
+    def test_not_found_excluded(self, _sign, mock_post, monkeypatch):
         monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "ok": False,
-            "slackIds": [{"alias": "jdoe", "slackId": "U1"}],
+            "aliasToSlackIdMap": [{"alias": "jdoe", "slackId": "U1", "isActive": True}],
             "aliasesNotFound": ["ghost"],
         }
         mock_post.return_value = mock_resp
@@ -79,11 +98,29 @@ class TestLookupSlackIdsByAliases:
 
     @patch("app.services.slab_client.requests.post")
     @patch("app.services.slab_client._signed_headers", return_value={})
+    def test_inactive_user_treated_as_not_found(self, _sign, mock_post, monkeypatch):
+        monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "ok": True,
+            "aliasToSlackIdMap": [
+                {"alias": "jdoe", "slackId": "U1", "isActive": True},
+                {"alias": "gone", "slackId": "U9", "isActive": False},
+            ],
+        }
+        mock_post.return_value = mock_resp
+
+        result = lookup_slack_ids_by_aliases(["jdoe", "gone"])
+        assert result == {"jdoe": "U1"}
+
+    @patch("app.services.slab_client.requests.post")
+    @patch("app.services.slab_client._signed_headers", return_value={})
     def test_dedupe_and_normalize(self, _sign, mock_post, monkeypatch):
         monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": True, "slackIds": {"jdoe": "U1"}}
+        mock_resp.json.return_value = {"ok": True, "aliasToSlackIdMap": {"jdoe": "U1"}}
         mock_post.return_value = mock_resp
 
         lookup_slack_ids_by_aliases(["JDoe", "jdoe", "  JDOE "])
@@ -97,7 +134,7 @@ class TestLookupSlackIdsByAliases:
         monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": True, "slackIds": {}}
+        mock_resp.json.return_value = {"ok": True, "aliasToSlackIdMap": []}
         mock_post.return_value = mock_resp
 
         aliases = [f"user{i}" for i in range(1300)]
@@ -141,7 +178,10 @@ class TestLookupSlackIdByAlias:
         monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": True, "slackIds": {"jdoe": "U12345"}}
+        mock_resp.json.return_value = {
+            "ok": True,
+            "aliasToSlackIdMap": [{"alias": "jdoe", "slackId": "U12345", "isActive": True}],
+        }
         mock_post.return_value = mock_resp
 
         assert lookup_slack_id_by_alias("jdoe") == "U12345"
@@ -152,7 +192,11 @@ class TestLookupSlackIdByAlias:
         monkeypatch.setenv("SLAB_ENDPOINT", "https://slab.example.aws/lookup")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": False, "slackIds": {}, "aliasesNotFound": ["ghost"]}
+        mock_resp.json.return_value = {
+            "ok": False,
+            "aliasToSlackIdMap": [],
+            "aliasesNotFound": ["ghost"],
+        }
         mock_post.return_value = mock_resp
 
         with pytest.raises(SlackUserNotFoundError):

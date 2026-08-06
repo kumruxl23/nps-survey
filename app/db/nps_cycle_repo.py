@@ -59,6 +59,7 @@ def _item_to_survey_cycle(item: dict) -> SurveyCycle:
         asana_form_url=item.get("asana_form_url", ""),
         quip_doc_id=item.get("quip_doc_id", ""),
         cycle_name=item.get("cycle_name", ""),
+        action_due_date=item.get("action_due_date", ""),
         created_at=item.get("created_at", ""),
     )
 
@@ -79,6 +80,7 @@ def put_cycle(cycle: SurveyCycle) -> None:
         "asana_form_url": cycle.asana_form_url,
         "quip_doc_id": cycle.quip_doc_id,
         "cycle_name": cycle.cycle_name,
+        "action_due_date": cycle.action_due_date,
         "created_at": cycle.created_at or datetime.now(timezone.utc).isoformat(),
     }
     table.put_item(Item=item)

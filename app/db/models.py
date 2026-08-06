@@ -20,6 +20,8 @@ class OrgConfig:
     custom_field_leader_gid: str = ""
     custom_field_feedback_gid: str = ""  # text/enum field with respondent's free-form feedback
     custom_field_what_missing_gid: str = ""  # text field "What was missing" — concat with feedback
+    custom_field_respondent_name_gid: str = ""  # Asana form "Name" field → stakeholder name
+    custom_field_respondent_email_gid: str = ""  # Asana form "Email address" field → stakeholder email/alias
     quip_doc_id: str = ""
     reminder_channels: list[ReminderChannel] = field(default_factory=lambda: ["email"])
     slack_bot_token: str = ""
@@ -42,6 +44,7 @@ class SurveyCycle:
     asana_form_url: str = ""
     quip_doc_id: str = ""
     cycle_name: str = ""  # e.g. "Q2 2025"
+    action_due_date: str = ""  # ISO date leaders' Asana action tasks are due by
     created_at: str = ""
 
 

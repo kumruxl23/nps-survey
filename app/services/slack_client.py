@@ -52,7 +52,13 @@ def lookup_user_by_email(email: str, bot_token: str) -> str:
     raise RuntimeError(f"Slack API error: {error}")
 
 
-def send_dm(user_id: str, message: str, bot_token: str) -> SlackResult:
+def send_dm(
+    user_id: str,
+    message: str,
+    bot_token: str,
+    username: str = "",
+    icon_url: str = "",
+) -> SlackResult:
     """Send a direct message to a Slack user.
 
     Uses chat.postMessage with the user_id as the channel to open
@@ -62,6 +68,11 @@ def send_dm(user_id: str, message: str, bot_token: str) -> SlackResult:
         user_id: The Slack user ID to send the DM to.
         message: The message text to send.
         bot_token: Slack Bot Token (per-org, stored in OrgConfig).
+        username: Optional custom sender display name (needs the
+            ``chat:write.customize`` scope). When set, the DM shows this
+            name instead of the app's default.
+        icon_url: Optional custom sender avatar URL (also
+            ``chat:write.customize``).
 
     Returns:
         SlackResult with ok=True on success, or ok=False with error details.
@@ -71,6 +82,10 @@ def send_dm(user_id: str, message: str, bot_token: str) -> SlackResult:
         "Content-Type": "application/json",
     }
     payload = {"channel": user_id, "text": message}
+    if username:
+        payload["username"] = username
+    if icon_url:
+        payload["icon_url"] = icon_url
 
     try:
         resp = requests.post(

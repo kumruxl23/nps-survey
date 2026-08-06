@@ -1,16 +1,19 @@
-"""Per-org shareable-link tokens for the self-serve nomination form.
+"""Shareable-link tokens for the self-serve nomination form.
 
 Leaders and their directs don't have app accounts, so the nomination form
 can be opened with a capability URL instead: /nps/nominate/view?token=...
-Each org has its OWN token, so a link only ever exposes that org's
-leaders, cycle, and nominations. The token grants access to the
-nomination form routes ONLY — the rest of the app still requires a
-login session.
+The link handed out today is a single COMMON token (org sentinel ``*``):
+the viewer's org is resolved from their identity server-side (home-org
+resolution in the context route), so one link works for every org.
+Legacy per-org tokens still resolve and stay locked to their org, so
+links sent out before the common link shipped keep working. The token
+grants access to the nomination form routes ONLY — the rest of the app
+still requires a login session.
 
 Tokens are stored as ``__share__nominate_form#<org_id>`` system rows in
 the NpsOrgConfig table (same pattern as ``__user__``/``__leader__`` rows,
-which org listings already exclude). Admins can rotate a link per org if
-it leaks.
+which org listings already exclude; the common token uses org_id ``*``).
+Admins can rotate the link if it leaks.
 """
 
 import os
@@ -21,6 +24,9 @@ import boto3
 SHARE_PREFIX = "__share__nominate_form#"
 # Pre-org-scoping key — treated as invalid; rotate created per-org rows.
 LEGACY_SHARE_KEY = "__share__nominate_form"
+# Sentinel org for the common (org-agnostic) share token. resolve_token
+# returns it verbatim; routes treat it as "valid token, no org lock".
+COMMON_ORG = "*"
 
 
 def _get_table():
@@ -53,8 +59,22 @@ def rotate_token(org_id: str) -> str:
     return token
 
 
+def get_or_create_common_token() -> str:
+    """Return the common (org-agnostic) share token, creating it on first use."""
+    return get_or_create_token(COMMON_ORG)
+
+
+def rotate_common_token() -> str:
+    """Issue a fresh common share token, invalidating the old common link."""
+    return rotate_token(COMMON_ORG)
+
+
 def resolve_token(token: str) -> str | None:
     """Return the org_id a presented token belongs to, or None.
+
+    The common token resolves to :data:`COMMON_ORG` (``*``) — callers
+    treat that as "valid, not locked to any org". Legacy per-org tokens
+    resolve to their org_id and remain org-locked.
 
     Constant-time comparison against every stored org token (org count is
     single digits, so a scan is fine).

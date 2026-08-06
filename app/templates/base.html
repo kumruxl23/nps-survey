@@ -4,50 +4,193 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}NPS Survey Tool{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
   <style>
-    body { background: #f5f6f8; }
+    :root {
+      --bg-canvas: #F8FAFC;
+      --card-bg: #FFFFFF;
+      --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --card-radius: 16px;
+      --promoter: #10B981;
+      --passive: #F59E0B;
+      --detractor: #EF4444;
+      --primary-accent: #3B82F6;
+      --text-primary: #0F172A;
+      --text-secondary: #64748B;
+      --text-label: #6B7280;
+      --gap-cards: 24px;
+      --gap-sections: 32px;
+    }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-canvas);
+    }
     .whs-header {
-      background: #232f3e;
-      padding: 10px 24px;
+      background: #232f3e;  /* keep the WHS dark charcoal */
+      padding: 16px 32px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
+    .whs-brand { display: flex; align-items: center; gap: 24px; }
+    /* Original WHS logo styling (reverted) */
     .whs-logo-area { display: flex; align-items: center; gap: 12px; }
     .whs-logo-text { color: #2ea043; font-size: 2rem; font-weight: 900; letter-spacing: 2px; }
     .whs-logo-sub { color: #ccc; font-size: 0.85rem; line-height: 1.2; }
-    .whs-title { color: white; font-size: 1.3rem; font-weight: 700; }
-    .whs-nav a { color: #adb5bd; text-decoration: none; margin-left: 18px; font-size: 0.85rem; }
-    .whs-nav a:hover { color: white; }
-    .whs-nav a.active { color: white; border-bottom: 2px solid #2ea043; padding-bottom: 2px; }
-    .filter-bar { background: #e9ecef; border-radius: 6px; padding: 10px 16px; margin-bottom: 16px; }
-    .stat-row { display: flex; gap: 12px; margin-bottom: 16px; }
-    .stat-box { flex: 1; background: white; border-radius: 8px; padding: 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-    .stat-box .label { font-size: 0.75rem; color: #6c757d; text-transform: uppercase; }
-    .stat-box .value { font-size: 1.8rem; font-weight: 700; }
-    .org-tabs .nav-link { font-weight: 600; }
-    .org-tabs .nav-link.active { background: #2ea043; color: white; border-color: #2ea043; }
+    .whs-title { color: white; font-size: 22px; font-weight: 600; line-height: 1.2; }
+    .whs-subtitle { color: rgba(255,255,255,0.6); font-size: 11px; font-weight: 400; }
+    .whs-nav { display: flex; align-items: center; gap: 24px; }
+    .whs-nav a {
+      color: rgba(255,255,255,0.7);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 6px;
+      transition: color 0.2s, background 0.2s;
+    }
+    .whs-nav a:hover { color: white; background: rgba(255,255,255,0.08); }
+    .whs-nav a.active {
+      /* Selected page = green "toggle" box, no underlines anywhere */
+      color: white;
+      font-weight: 600;
+      background: #3A5A4A;
+    }
+    .whs-nav .nav-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.2); }
+    .whs-nav a.whs-logout {
+      color: rgba(255,255,255,0.85);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 12px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .whs-nav a.whs-logout:hover {
+      color: white;
+      border-color: white;
+      background: rgba(255,255,255,0.1);
+    }
+    @media (max-width: 1200px) {
+      .whs-header { padding: 12px 16px; }
+      .whs-brand { gap: 14px; }
+      .whs-nav { gap: 14px; }
+      .whs-nav a { font-size: 12px; }
+      .whs-subtitle { display: none; }
+    }
+    .filter-bar {
+      background: #FFFFFF;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: var(--card-shadow);
+    }
+    .filter-bar .form-select, .filter-bar .form-control {
+      border-radius: 8px;
+      border: 1px solid #E2E8F0;
+    }
+    .stat-row { display: flex; gap: var(--gap-cards); margin-bottom: var(--gap-sections); }
+    .stat-box {
+      flex: 1;
+      background: var(--card-bg);
+      box-shadow: var(--card-shadow);
+      border-radius: var(--card-radius);
+      padding: 24px;
+      text-align: center;
+    }
+    .stat-box .label {
+      font-weight: 500;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-label);
+    }
+    .stat-box .value { font-weight: 800; font-size: 48px; color: var(--text-primary); }
+    .org-tabs { border-bottom: 0; gap: 4px; }
+    .org-tabs .nav-link {
+      padding: 8px 20px;
+      border-radius: 24px;
+      border: 0;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: transparent;
+      color: var(--text-secondary);
+    }
+    .org-tabs .nav-link:hover:not(.active) { background: #E2E8F0; }
+    .org-tabs .nav-link.active { background: var(--primary-accent); color: white; }
+    .card-hover:hover {
+      box-shadow: 0 4px 6px rgba(0,0,0,0.08);
+      transform: translateY(-2px);
+      transition: all 0.2s ease;
+    }
+    /* Skeleton shimmer loading placeholders (shared by all pages) */
+    .skeleton {
+      position: relative;
+      overflow: hidden;
+      background: #E2E8F0;
+      border-radius: 8px;
+    }
+    .skeleton::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(90deg,
+        transparent 0%, rgba(255, 255, 255, 0.4) 50%, transparent 100%);
+      animation: shimmer 1.5s infinite;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    /* Skeleton variants for different element types */
+    .skeleton-card { height: 120px; border-radius: var(--card-radius, 16px); }
+    .skeleton-kpi { height: 100px; border-radius: var(--card-radius, 16px); }
+    .skeleton-chart { height: 300px; border-radius: var(--card-radius, 16px); }
+    .skeleton-row { height: 44px; border-radius: 6px; margin-bottom: 8px; }
+    .skeleton-text { height: 16px; border-radius: 4px; width: 60%; }
+    .skeleton-text-short { height: 16px; border-radius: 4px; width: 30%; }
+    /* Subtle fade-in when real content replaces a skeleton */
+    .stat-box, .chart-card {
+      animation: fadeIn 0.3s ease-in;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0.6; }
+      to { opacity: 1; }
+    }
   </style>
   {% block head %}{% endblock %}
 </head>
 <body>
   <div class="whs-header">
-    <div class="whs-logo-area">
-      <div>
-        <span class="whs-logo-text">WHS</span>
+    <div class="whs-brand">
+      <div class="whs-logo-area">
+        <div>
+          <span class="whs-logo-text">WHS</span>
+        </div>
+        <div class="whs-logo-sub">Workplace<br>Health &amp; Safety</div>
       </div>
-      <div class="whs-logo-sub">Workplace<br>Health &amp; Safety</div>
+      <div>
+        <div class="whs-title">Net Promoter Score</div>
+        <div class="whs-subtitle">WHS Central Programs</div>
+      </div>
     </div>
-    <div class="whs-title">NPS Dashboard</div>
     <div class="whs-nav">
-      <a href="/nps/dashboard" class="active">Dashboard</a>
-      <a href="/nps/orgs/view">Orgs</a>
-      <a href="/nps/nominations/view">Nominations</a>
-      <a href="/nps/nominate/view">Nominate</a>
-      <a href="/nps/cycles/view">Cycles</a>
-      <a href="/nps/responses/view">Responses</a>
-      <a href="/nps/auth/logout" style="color:#ffc107">Logout</a>
+      <a href="/nps/dashboard" class="{% if request.endpoint == 'nps.dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="/nps/orgs/view" class="{% if request.endpoint == 'nps.orgs_view' %}active{% endif %}">Orgs</a>
+      <a href="/nps/nominations/view" class="{% if request.endpoint == 'nps.nominations_view' %}active{% endif %}">Nominations</a>
+      <a href="/nps/nominate/view" class="{% if request.endpoint == 'nps.nominate_view' %}active{% endif %}">Nominate</a>
+      <a href="/nps/cycles/view" class="{% if request.endpoint == 'nps.cycles_view' %}active{% endif %}">Cycles</a>
+      <a href="/nps/responses/view" class="{% if request.endpoint == 'nps.responses_view' %}active{% endif %}">Responses</a>
+      <span class="nav-divider"></span>
+      <a href="/nps/auth/logout" class="whs-logout">Logout</a>
     </div>
   </div>
   <div class="container-fluid px-4 py-3">

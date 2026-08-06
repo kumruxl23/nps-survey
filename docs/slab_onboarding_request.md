@@ -49,16 +49,27 @@ HTTPS call:
 
 ### Decision: SDK-via-pipeline vs hand-rolled interim
 
-- **Option A (recommended):** adopt the SDK as part of the Brazil/Apollo
-  pipeline conversion (SDO Phase 3). Clean, supported, and satisfies the
-  certifier's pipeline ask in one stroke.
-- **Option B (interim):** keep the hand-rolled `slab_client.py`, but then
-  we need (1) the raw prod endpoint URL (from OpusSLABClientConfig / ask on
-  ticket) and (2) switch signing to SigV4a (`aws-crt-python`). Fragile;
-  diverges from supported usage.
+- **Option A (recommended long-term):** adopt the SDK as part of the
+  Brazil/Apollo pipeline conversion (SDO Phase 3). Clean, supported, and
+  satisfies the certifier's pipeline ask in one stroke.
+- **Option B (interim — NOW IMPLEMENTED):** hand-rolled `slab_client.py`
+  calling the raw HTTPS endpoint. Both unknowns are now resolved:
+  1. **Endpoint** — confirmed from `OpusSLABClientConfig/coral-config/OpusSLABProd.config`
+     (the source of truth): `https://api.prod.slack-admin.enterprise-engineering.aws.dev`.
+     The Coral REST/JSON binding maps the method to `/opus.users.getSlackIdFromAlias`,
+     so the full URL is baked in as `DEFAULT_SLAB_ENDPOINT`.
+  2. **Signing** — switched to **SigV4a** via botocore's CRT signer
+     (`botocore.crt.auth.CrtSigV4AsymAuth`, service `execute-api`,
+     region-set `*`). Region `*` makes the signature valid at whichever
+     regional gateway latency-based DNS routes us to — important because
+     our EC2 is in ap-south-1, which may have no local SLAB deployment.
+     Added `awscrt` to `requirements.txt`. Response parsing uses the real
+     `aliasToSlackIdMap` contract (`{alias, slackId, isActive}`;
+     `isActive:false` treated as not-found).
 
-Slack DMs are NOT needed for the demo (email-only), so no rush. Prefer
-Option A alongside the pipeline work.
+This matches the raw-HTTPS pattern used by production SLAB consumers
+(EMRClusterTerminationLambda, CIASHIFTApi) but with SigV4a instead of
+plain v4 for cross-region robustness.
 
 Still needed either way:
 - Prod API key (store in Secrets Manager nps-survey/slab-api-key) — RECEIVED
@@ -114,12 +125,17 @@ change, not a code change:
 
 | Constant / env | Meaning | Status |
 |---|---|---|
-| `SLAB_ENDPOINT` | Full `OpusUsersGetSlackIDFromAlias` URL | **Need from onboarding** |
-| `SLAB_REGION` | Region for SigV4 signing | Confirm (default us-east-1) |
-| `SLAB_SERVICE_NAME` | SigV4 service name | Confirm (default execute-api) |
-| `SLAB_API_KEY_SECRET_ID` | Secrets Manager id for the API key | We create: `nps-survey/slab-api-key` |
-| `REQUEST_ALIAS_FIELD` | JSON field carrying the alias | Confirm (assumed `alias`) |
-| `RESPONSE_SLACK_ID_FIELD` | JSON field with the Slack ID | Confirm (assumed `slackId`) |
+| `SLAB_ENDPOINT` | Full method URL | **CONFIRMED** `https://api.prod.slack-admin.enterprise-engineering.aws.dev/opus.users.getSlackIdFromAlias` |
+| `SLAB_REGION` | SigV4a region-set | **CONFIRMED** `*` (multi-region active-active) |
+| `SLAB_SERVICE_NAME` | SigV4 signing service | **CONFIRMED** `execute-api` |
+| `SLAB_API_KEY_SECRET_ID` | Secrets Manager id for the API key | `nps-survey/slab-api-key` (create + populate — see below) |
+| `REQUEST_ALIASES_FIELD` | JSON field carrying aliases | **CONFIRMED** `userAliases` |
+| `RESPONSE_RESULTS_FIELD` | JSON field with results | **CONFIRMED** `aliasToSlackIdMap` (list of `{alias, slackId, isActive}`) |
+
+**API key:** issued and posted to onboarding ticket **D490668297** (now
+Closed, resolution "API Key Created"). Do NOT paste the raw key into the
+repo — pull it from the ticket and store it in Secrets Manager (below).
+For local testing only, export it as `SLAB_API_KEY`.
 
 ## Onboarding flow (from the SLAB KB)
 

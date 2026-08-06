@@ -82,6 +82,51 @@ def reminder_check_job():
             )
 
 
+def _phase_base_url() -> str:
+    """Public base URL for links in phase notifications (no request context)."""
+    return os.environ.get("NPS_PUBLIC_BASE_URL", "https://nps.whs-cpt.amazon.dev").rstrip("/")
+
+
+def phase_send_job(now: datetime = None):
+    """Scheduled job: dispatch due survey phases across active orgs/cycles.
+
+    Runs alongside reminder_check_job. For each active org's active cycle,
+    evaluates every phase in the admin-defined sequence and dispatches those
+    whose cadence is due. Per-org and per-phase errors are contained so one
+    failure never halts the loop.
+    """
+    from app.services import nps_cycle_service, nps_org_config_service, nps_phase_service
+
+    now = now or datetime.now(timezone.utc)
+    try:
+        active_orgs = nps_org_config_service.list_active_orgs()
+    except Exception:
+        logger.exception("Failed to list active orgs in phase_send_job")
+        return
+
+    base_url = _phase_base_url()
+    for org in active_orgs:
+        try:
+            cycle = nps_cycle_service.get_active_cycle(org.org_id)
+            if not cycle:
+                continue
+            phases = nps_phase_service.get_phase_sequence(org.org_id, cycle.cycle_id)
+            for phase in phases:
+                try:
+                    if nps_phase_service.phase_send_due(phase, now):
+                        nps_phase_service.dispatch_phase(
+                            org.org_id, cycle.cycle_id, phase, base_url,
+                            trigger_type="automated",
+                        )
+                except Exception:
+                    logger.exception(
+                        "phase dispatch failed org=%s phase=%s",
+                        org.org_id, phase.get("name"),
+                    )
+        except Exception:
+            logger.exception("phase_send_job failed for org '%s'", org.org_id)
+
+
 def init_scheduler(app):
     """Initialize the APScheduler BackgroundScheduler within the Flask app.
 
@@ -101,6 +146,13 @@ def init_scheduler(app):
         reminder_check_job,
         trigger=IntervalTrigger(minutes=interval_minutes),
         id="nps_reminder_check",
+        max_instances=1,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        phase_send_job,
+        trigger=IntervalTrigger(minutes=interval_minutes),
+        id="nps_phase_send",
         max_instances=1,
         replace_existing=True,
     )

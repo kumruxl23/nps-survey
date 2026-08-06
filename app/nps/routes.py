@@ -9,16 +9,20 @@ import functools
 import logging
 import os
 
-from flask import Blueprint, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
 
 from app.services import (
+    nps_asana_dashboard_service,
     nps_cycle_service,
     nps_dashboard_service,
     nps_distribution_service,
+    nps_export_service,
     nps_leader_service,
     nps_nomination_service,
     nps_org_config_service,
+    nps_phase_service,
     nps_response_service,
+    nps_settings_service,
     nps_share_link_service,
 )
 from app.services import asana_client
@@ -109,6 +113,8 @@ def update_org():
         "custom_field_leader_gid",
         "custom_field_feedback_gid",
         "custom_field_what_missing_gid",
+        "custom_field_respondent_name_gid",
+        "custom_field_respondent_email_gid",
         "slack_bot_token",
         "reminder_channels",
         "auto_add_unmatched",
@@ -323,7 +329,11 @@ def login_or_share_token(f):
         if "user" not in session:
             share_org = nps_share_link_service.resolve_token(request.args.get("token", ""))
             if share_org:
-                g.share_org_id = share_org  # token: locked to this org
+                # Common token: valid but org-agnostic (the viewer's org is
+                # resolved from their identity). Legacy per-org tokens stay
+                # locked to their org.
+                if share_org != nps_share_link_service.COMMON_ORG:
+                    g.share_org_id = share_org  # token: locked to this org
             elif not _midway_header_alias():
                 if request.is_json or request.headers.get("Accept") == "application/json":
                     return jsonify({"error": "Authentication required"}), 401
@@ -455,6 +465,55 @@ def remind_leaders():
         return jsonify({"error": str(exc)}), 500
 
 
+@nps_bp.route("/leaders/notify-open", methods=["POST"])
+@role_required("admin", "editor")
+def notify_nomination_open():
+    """Notify an org's roster leaders that nominations have OPENED.
+
+    Kickoff announcement over email + Slack DM (distinct from the periodic
+    reminder). Each notification is redirected to the leader's test alias
+    (notify_alias) when set. Body: {org_id, deadline?, note?, channels?}
+    where channels is an optional subset of ["email", "slack"] (both by
+    default).
+    """
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        if not org_id:
+            return jsonify({"error": "org_id is required"}), 400
+        channels = data.get("channels") or ["email", "slack"]
+        if not isinstance(channels, list) or not set(channels) <= {"email", "slack"}:
+            return jsonify({"error": "channels must be a subset of ['email','slack']"}), 400
+        result = nps_leader_service.send_nomination_open(
+            base_url=request.host_url,
+            org_id=org_id,
+            deadline=data.get("deadline", ""),
+            note=data.get("note", ""),
+            channels=tuple(channels),
+        )
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error sending nomination-open notification")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/leaders/slack-check", methods=["GET"])
+@role_required("admin", "editor")
+def check_slack_resolution():
+    """Diagnose SLAB alias→Slack-ID resolution (read-only, no bot token).
+
+    Query: ?alias=<amazon-alias>. Verifies the SLAB half of the Slack DM
+    path works on this host (SLAB only accepts the allowlisted EC2 role, so
+    this is meaningful after deploy). Returns {alias, ok, slack_id, error}.
+    """
+    alias = request.args.get("alias", "")
+    if not alias:
+        return jsonify({"error": "alias query param is required"}), 400
+    return jsonify(nps_leader_service.check_slack_resolution(alias))
+
+
 @nps_bp.route("/leaders/remove", methods=["POST"])
 @role_required("admin", "editor")
 def remove_leader():
@@ -477,12 +536,17 @@ def nominate_view():
 @nps_bp.route("/nominate/share-link/rotate", methods=["POST"])
 @role_required("admin")
 def rotate_share_link():
-    """Invalidate one org's share link and issue a fresh one."""
+    """Invalidate the common share link and issue a fresh one.
+
+    Passing an org_id rotates that org's LEGACY per-org token instead
+    (kills an old org-locked link that leaked).
+    """
     org_id = (request.json or {}).get("org_id", "")
-    if not org_id:
-        return jsonify({"error": "org_id is required"}), 400
-    token = nps_share_link_service.rotate_token(org_id)
-    return jsonify({"org_id": org_id, "share_path": f"/nps/nominate/view?token={token}"})
+    if org_id:
+        token = nps_share_link_service.rotate_token(org_id)
+        return jsonify({"org_id": org_id, "share_path": f"/nps/nominate/view?token={token}"})
+    token = nps_share_link_service.rotate_common_token()
+    return jsonify({"share_path": f"/nps/nominate/view?token={token}"})
 
 
 @nps_bp.route("/nominate/invite", methods=["POST"])
@@ -536,8 +600,11 @@ def nominate_prefill():
 def nominate_context():
     """Data the nomination form needs: orgs with active cycles + leaders.
 
-    Share-token callers get ONLY their org (locked); logged-in users see
-    all active orgs with leaders scoped per org.
+    Share-token callers get ONLY their org (locked). Logged-in viewers are
+    defaulted to their HOME org (the org where their leader resolves —
+    e.g. kumruxl under Sandeep's roster → whs_cpt_in); non-admins are
+    LOCKED to it (the org list is filtered server-side, not just hidden
+    in the UI). Admins see all active orgs and may switch.
     """
     try:
         share_org = getattr(g, "share_org_id", None)
@@ -561,25 +628,45 @@ def nominate_context():
                 ),
             })
         viewer = getattr(g, "viewer_alias", "") or ""
+        # Only admins may switch orgs; everyone else is pinned to their
+        # home org (when one resolves). Share-token access keeps its own
+        # org lock and skips home-org resolution entirely.
+        can_switch_org = session.get("user", {}).get("role") == "admin"
+        home_org = ""
+        if not share_org and viewer:
+            home_org = nps_nomination_service.resolve_home_org(
+                viewer, [o["org_id"] for o in orgs]
+            )
+        locked_org = share_org
+        if home_org and not can_switch_org:
+            # Enforce the lock server-side: a non-admin's context contains
+            # ONLY their org, so the client can't reveal other orgs by
+            # unhiding the selector.
+            orgs = [o for o in orgs if o["org_id"] == home_org]
+            locked_org = home_org
         payload = {
             "orgs": orgs,
-            "locked_org": share_org,
+            "locked_org": locked_org,
+            # The viewer's own org — the UI preselects it (admins can
+            # still switch away; non-admins are locked above).
+            "default_org": home_org,
             "viewer": {
                 "alias": viewer,
+                "can_switch_org": can_switch_org,
                 # Per-org full-visibility flag (admin/editor/roster leader).
                 "privileged_orgs": {
                     o["org_id"]: _is_privileged_for_org(o["org_id"]) for o in orgs
                 },
             },
         }
-        # Admins/editors get per-org shareable capability URLs so they can
-        # send each org's leaders their own link (no login needed).
+        # Admins/editors get the COMMON shareable capability URL — one link
+        # for everyone (no login needed); each viewer lands on the org their
+        # identity resolves to.
         if session.get("user", {}).get("role") in ("admin", "editor"):
-            payload["share_paths"] = {
-                o["org_id"]: "/nps/nominate/view?token="
-                + nps_share_link_service.get_or_create_token(o["org_id"])
-                for o in orgs
-            }
+            payload["share_path"] = (
+                "/nps/nominate/view?token="
+                + nps_share_link_service.get_or_create_common_token()
+            )
         return jsonify(payload)
     except Exception as exc:
         logger.exception("Error building nomination form context")
@@ -835,6 +922,132 @@ def nominate_bulk_submit():
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         logger.exception("Error bulk-submitting nominations")
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Dashboard settings (admin-editable UI content, persisted program-wide)
+# ---------------------------------------------------------------------------
+
+
+@nps_bp.route("/settings", methods=["GET"])
+@login_required
+def get_settings():
+    """Return the persisted dashboard settings blob (or defaults)."""
+    try:
+        return jsonify(nps_settings_service.get_dashboard_settings())
+    except Exception as exc:
+        logger.exception("Error loading dashboard settings")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/settings", methods=["POST"])
+@role_required("admin")
+def save_settings():
+    """Overwrite the dashboard settings blob (admins only, last write wins)."""
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Body must be a JSON object"}), 400
+        result = nps_settings_service.save_dashboard_settings(data, _viewer_alias())
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error saving dashboard settings")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/admin/export.xlsx", methods=["GET"])
+@role_required("admin", "editor")
+def export_cycle_xlsx():
+    """Download a cycle's responses as an XLSX file.
+
+    Query: cycle_id (required), org_id (optional — omit for all orgs).
+    Columns: Org, Leader, Stakeholder, NPS Category, What Was Missing,
+    Feedback, Action Taken. Missing fields are left blank.
+    """
+    cycle_id = request.args.get("cycle_id", "")
+    org_id = request.args.get("org_id", "")
+    if not cycle_id:
+        return jsonify({"error": "cycle_id is required"}), 400
+    try:
+        data, filename = nps_export_service.build_cycle_export(cycle_id, org_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error building cycle export")
+        return jsonify({"error": str(exc)}), 500
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Survey phase schedule routes (admin only)
+# ---------------------------------------------------------------------------
+
+
+@nps_bp.route("/phases", methods=["GET"])
+@role_required("admin")
+def get_phases():
+    """Return the admin-defined phase sequence for an org+cycle."""
+    org_id = request.args.get("org_id", "")
+    cycle_id = request.args.get("cycle_id", "")
+    if not org_id or not cycle_id:
+        return jsonify({"error": "org_id and cycle_id are required"}), 400
+    try:
+        return jsonify(nps_phase_service.get_phase_sequence(org_id, cycle_id))
+    except Exception as exc:
+        logger.exception("Error loading phase sequence")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/phases", methods=["POST"])
+@role_required("admin")
+def save_phases():
+    """Validate + persist the whole phase sequence (last write wins)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        org_id = data.get("org_id", "")
+        cycle_id = data.get("cycle_id", "")
+        phases = data.get("phases")
+        if not org_id or not cycle_id:
+            return jsonify({"error": "org_id and cycle_id are required"}), 400
+        saved = nps_phase_service.save_phase_sequence(
+            org_id, cycle_id, phases, _viewer_alias()
+        )
+        return jsonify(saved)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error saving phase sequence")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/phases/send-now", methods=["POST"])
+@role_required("admin")
+def send_phase_now():
+    """Manually dispatch one phase (for manual-cadence phases)."""
+    try:
+        data = request.json or {}
+        org_id = data.get("org_id", "")
+        cycle_id = data.get("cycle_id", "")
+        phase_id = data.get("phase_id", "")
+        if not all([org_id, cycle_id, phase_id]):
+            return jsonify({"error": "org_id, cycle_id, and phase_id are required"}), 400
+        if not os.environ.get("NPS_FROM_ADDRESS"):
+            return jsonify({"error": "NPS_FROM_ADDRESS not configured"}), 503
+        result = nps_phase_service.dispatch_phase_by_id(
+            org_id, cycle_id, phase_id, request.host_url, trigger_type="manual"
+        )
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Error dispatching phase")
         return jsonify({"error": str(exc)}), 500
 
 
@@ -1129,6 +1342,68 @@ def responses_view():
     return render_template("nps_responses.html")
 
 
+def _feedback_scope():
+    """Who can see which feedback.
+
+    Returns (is_super, my_leader_name):
+      - is_super=True  → admins + admin-approved "super leaders"
+        (the ``admin_leaders`` settings list): see ALL feedback.
+      - otherwise my_leader_name is the leader the viewer maps to (roster);
+        a regular leader sees ONLY their own rows. Empty name = sees nothing.
+    """
+    role = session.get("user", {}).get("role", "")
+    viewer = (_viewer_alias() or "").strip().lower()
+    try:
+        super_leaders = [
+            str(a).strip().lower()
+            for a in (nps_settings_service.get_dashboard_settings().get("admin_leaders") or [])
+        ]
+    except Exception:
+        super_leaders = []
+    is_super = role == "admin" or (bool(viewer) and viewer in super_leaders)
+    my_leader_name = ""
+    if not is_super and viewer:
+        ld = nps_leader_service.get_leader(viewer)
+        if ld:
+            my_leader_name = ld.get("name", "")
+    return is_super, my_leader_name
+
+
+@nps_bp.route("/feedback", methods=["GET"])
+@login_required
+def list_feedback():
+    """Live per-stakeholder feedback (from Asana), gated per-leader.
+
+    Query: org_id, cycle_id (both required). Returns rows with real
+    respondent identity (name/email→alias) when the org's respondent
+    Name/Email Asana field GIDs are configured. Access follows
+    ``_feedback_scope`` — super-viewers see all, a leader sees only theirs.
+    """
+    org_id = request.args.get("org_id", "")
+    cycle_id = request.args.get("cycle_id", "")
+    if not org_id or not cycle_id:
+        return jsonify({"error": "org_id and cycle_id are required"}), 400
+    try:
+        rows = nps_asana_dashboard_service.get_feedback(org_id, cycle_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        logger.exception("Asana feedback fetch failed")
+        return jsonify({"error": f"Asana fetch failed: {exc}"}), 502
+    except Exception as exc:
+        logger.exception("Error building feedback")
+        return jsonify({"error": str(exc)}), 500
+
+    is_super, my_leader_name = _feedback_scope()
+    if not is_super:
+        rows = [r for r in rows if (r.get("leader") or "") == my_leader_name] if my_leader_name else []
+
+    for r in rows:
+        email = (r.get("respondent_email") or "").strip()
+        r["respondent_alias"] = email.split("#", 1)[0].split("@", 1)[0].strip().lower() if email else ""
+    return jsonify(rows)
+
+
 @nps_bp.route("/responses", methods=["GET"])
 @login_required
 def list_responses_for_dashboard():
@@ -1152,10 +1427,29 @@ def list_responses_for_dashboard():
         return jsonify({"error": "org_id and cycle_id are required"}), 400
 
     responses = nps_response_service.get_responses(org_id, cycle_id)
+
+    # Access control (feedback is identifiable stakeholder data) — see _feedback_scope.
+    is_super, my_leader_name = _feedback_scope()
+    if not is_super:
+        responses = (
+            [r for r in responses if (r.leader or "") == my_leader_name]
+            if my_leader_name else []
+        )
+
     if leader_filter:
         responses = [r for r in responses if (r.leader or "") == leader_filter]
     if category_filter:
         responses = [r for r in responses if r.category == category_filter]
+
+    # Stakeholder alias for phonetool avatars: responses are anonymous (name
+    # only), but nominations carry the email — join respondent_name -> alias.
+    from app.db import nps_nomination_repo
+    name_to_alias = {}
+    for nom in nps_nomination_repo.list_nominations(org_id, cycle_id):
+        nm = (getattr(nom, "name", "") or "").strip().lower()
+        email = (getattr(nom, "email", "") or "").strip()
+        if nm and email:
+            name_to_alias[nm] = email.split("#", 1)[0].split("@", 1)[0].strip().lower()
 
     # Sort: leader name asc, then recorded_at desc (newest first within a leader)
     responses.sort(key=lambda r: (r.leader or "", -1 * (
@@ -1179,6 +1473,9 @@ def list_responses_for_dashboard():
             "response_id": r.response_id,
             "leader": r.leader or "",
             "respondent_name": getattr(r, "respondent_name", "") or "",
+            "respondent_alias": name_to_alias.get(
+                (getattr(r, "respondent_name", "") or "").strip().lower(), ""
+            ),
             "nps_score": r.nps_score,
             "category": r.category,
             "feedback_text": r.feedback_text or "",
@@ -1284,7 +1581,56 @@ def dashboard():
     """
     org_id = request.args.get("org_id", "")
     if not org_id:
-        return render_template("nps_dashboard.html")
+        # Page render: give the template everything it needs up front —
+        # which orgs the viewer may see (admin = all, everyone else = their
+        # home org only) and each org's cycles, newest first.
+        role = session.get("user", {}).get("role", "")
+        viewer = _viewer_alias()
+        active = nps_org_config_service.list_active_orgs()
+        home_org = ""
+        if viewer:
+            home_org = nps_nomination_service.resolve_home_org(
+                viewer, [o.org_id for o in active]
+            )
+        visible = active if role == "admin" else [
+            o for o in active if o.org_id == home_org
+        ]
+        available_cycles = {}
+        for org in visible:
+            cycles = sorted(
+                nps_cycle_service.list_cycles(org.org_id),
+                key=lambda c: c.start_date or "",
+                reverse=True,
+            )
+            available_cycles[org.org_id] = [
+                {
+                    "cycle_id": c.cycle_id,
+                    "cycle_name": c.cycle_name or c.cycle_id,
+                    "status": c.status,
+                    "start_date": c.start_date,
+                    "end_date": c.end_date,
+                }
+                for c in cycles
+            ]
+        # Leader name -> alias map (for phonetool avatars in the leader table).
+        leader_aliases = {}
+        for org in visible:
+            for ld in nps_leader_service.list_leaders(org.org_id):
+                name = (ld.get("name") or "").strip().lower()
+                alias = (ld.get("alias") or "").strip()
+                if name and alias:
+                    leader_aliases[name] = alias
+        return render_template(
+            "nps_dashboard.html",
+            user_role=role,
+            user_home_org=home_org,
+            viewer_alias=viewer,
+            leader_aliases=leader_aliases,
+            available_orgs=[
+                {"org_id": o.org_id, "org_name": o.org_name} for o in visible
+            ],
+            available_cycles=available_cycles,
+        )
 
     try:
         cycle_id = request.args.get("cycle_id", "")
@@ -1301,25 +1647,74 @@ def dashboard():
         return jsonify({"error": str(exc)}), 500
 
 
+def _dashboard_org_forbidden(org_id: str):
+    """403 when a non-admin asks for an org that isn't their home org.
+
+    Admins may query any org. Everyone else (editors included) is limited
+    to the org their identity resolves to — enforced here server-side, not
+    just hidden in the UI.
+    """
+    if session.get("user", {}).get("role") == "admin":
+        return None
+    viewer = _viewer_alias()
+    home = ""
+    if viewer:
+        home = nps_nomination_service.resolve_home_org(
+            viewer,
+            [o.org_id for o in nps_org_config_service.list_active_orgs()],
+        )
+    if not org_id or org_id != home:
+        return jsonify({"error": "You can only view your own org's dashboard"}), 403
+    return None
+
+
+def _live_dashboard_response(fn):
+    """Shared plumbing for the live (Asana-backed) dashboard endpoints."""
+    org_id = request.args.get("org_id", "")
+    cycle_id = request.args.get("cycle_id", "")
+    if not org_id or not cycle_id:
+        return jsonify({"error": "org_id and cycle_id are required"}), 400
+    forbidden = _dashboard_org_forbidden(org_id)
+    if forbidden:
+        return forbidden
+    try:
+        return jsonify(fn(org_id, cycle_id))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:  # Asana API / transport failure
+        logger.exception("Asana live dashboard fetch failed")
+        return jsonify({"error": f"Asana fetch failed: {exc}"}), 502
+    except Exception as exc:
+        logger.exception("Error building live dashboard data")
+        return jsonify({"error": str(exc)}), 500
+
+
+@nps_bp.route("/dashboard/live", methods=["GET"])
+@login_required
+def dashboard_live():
+    """Live org+cycle headline numbers straight from Asana."""
+    return _live_dashboard_response(nps_asana_dashboard_service.get_dashboard_summary)
+
+
 @nps_bp.route("/dashboard/leaders", methods=["GET"])
 @login_required
 def dashboard_leaders():
-    """Return per-leader NPS breakdown for a given org/cycle.
+    """Per-leader live breakdown from Asana's Ongoing Survey section."""
+    return _live_dashboard_response(nps_asana_dashboard_service.get_leader_breakdown)
 
-    Query params:
-        org_id (required): Organization identifier.
-        cycle_id (required): Survey cycle identifier.
-    """
-    try:
-        org_id = request.args.get("org_id", "")
-        cycle_id = request.args.get("cycle_id", "")
-        if not org_id or not cycle_id:
-            return jsonify({"error": "org_id and cycle_id are required"}), 400
-        leaders = nps_dashboard_service.compute_nps_by_leader(org_id, cycle_id)
-        return jsonify(leaders)
-    except Exception as exc:
-        logger.exception("Error computing leader dashboard data")
-        return jsonify({"error": str(exc)}), 500
+
+@nps_bp.route("/dashboard/distribution", methods=["GET"])
+@login_required
+def dashboard_distribution():
+    """Per-leader promoter/passive/detractor counts (stacked chart data)."""
+    return _live_dashboard_response(nps_asana_dashboard_service.get_nps_distribution)
+
+
+@nps_bp.route("/dashboard/actions", methods=["GET"])
+@login_required
+def dashboard_actions():
+    """Per-leader completed vs incomplete action-task counts."""
+    return _live_dashboard_response(nps_asana_dashboard_service.get_action_tracker_status)
 
 # ---------------------------------------------------------------------------
 # Template view routes

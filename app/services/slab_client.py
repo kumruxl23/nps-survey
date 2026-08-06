@@ -8,23 +8,27 @@ Replaces the Slack ``users.lookupByEmail`` call (which needs the high-risk
 so the lookup no longer needs the broad Slack directory scope and no
 employee email is sent to Slack for resolution.
 
-Per the SLAB KB (ticket D490637982):
-- Auth: SigV4 (IAM role with ``execute-api:Invoke``) + an ``x-api-key``
-  header. Gamma and Prod issue DIFFERENT keys.
+Per the SLAB KB (onboarding ticket D490668297, now closed):
+- Auth: **SigV4a** (asymmetric) + an ``x-api-key`` header. SLAB is a
+  multi-region active-active API Gateway behind latency-based DNS, so we
+  sign with a region-set of ``*`` — the signature is valid at whichever
+  regional gateway DNS routes us to (our EC2 is in ap-south-1, which may
+  have no local SLAB deployment). This mirrors the boto3 ``opusslab`` SDK
+  (``signature_version="v4a"`` / ``region="global"``). Requires ``awscrt``.
+  Gamma and Prod issue DIFFERENT keys.
 - ``OpusUsersGetSlackIDFromAlias`` needs NO appsec review (admin APIs do).
 - Batch API: up to **600 aliases per invocation**. Aliases are
-  case-insensitive; returned IDs are lowercase-keyed. Response includes
-  ``ok`` (bool), ``aliasesNotFound`` (definitive misses), and
-  ``aliasesUnprocessed`` (transient — safe to retry).
+  case-insensitive; returned IDs are lowercase-keyed. Response carries an
+  ``aliasToSlackIdMap`` list of ``{alias, slackId, isActive}`` objects,
+  plus ``aliasesNotFound`` (definitive misses) and ``aliasesUnprocessed``
+  (transient — safe to retry).
 
-IMPORTANT — pending onboarding
-------------------------------
-The endpoint URL, SigV4 region, and the exact request/response FIELD
-NAMES are confirmed from the OpusSLABClient Python docs / onboarding
-ticket. They are env-overridable constants so finalizing is a CONFIG
-change, not a code change. The success-results field name
-(``RESPONSE_RESULTS_FIELD``) in particular MUST be confirmed. Alias
-derivation, batching, signing, and error handling are final.
+Endpoint (confirmed)
+--------------------
+The prod endpoint is fixed by OpusSLABClientConfig's coral-config
+(``https://api.prod.slack-admin.enterprise-engineering.aws.dev``); the
+Coral REST/JSON binding maps the method to ``/opus.users.getSlackIdFromAlias``.
+All values below are env-overridable so a future change is CONFIG, not code.
 """
 
 from __future__ import annotations
@@ -39,21 +43,29 @@ logger = logging.getLogger(__name__)
 
 MAX_ALIASES_PER_CALL = 600
 
-# ── Config (override via env; confirm real values at onboarding) ──────
-DEFAULT_SLAB_ENDPOINT = ""  # MUST be set from onboarding (Gamma or Prod)
-DEFAULT_SLAB_REGION = "us-east-1"
+# ── Config (override via env) ─────────────────────────────────────────
+# Prod endpoint is fixed by OpusSLABClientConfig coral-config
+# (OpusSLABProd.config → api.prod.slack-admin.enterprise-engineering.aws.dev).
+# The Coral REST/JSON binding maps OpusUsersGetSlackIDFromAlias to the
+# /opus.users.getSlackIdFromAlias path — so we hit that path directly.
+DEFAULT_SLAB_ENDPOINT = (
+    "https://api.prod.slack-admin.enterprise-engineering.aws.dev"
+    "/opus.users.getSlackIdFromAlias"
+)
+# SigV4a region-set. "*" makes the signature valid at any regional gateway
+# (SLAB is multi-region active-active behind latency-based DNS). SLAB is an
+# API Gateway, so the SigV4 signing service name is "execute-api".
+DEFAULT_SLAB_REGION = "*"
 DEFAULT_SLAB_SERVICE_NAME = "execute-api"
 DEFAULT_SLAB_API_KEY_SECRET_ID = "nps-survey/slab-api-key"
 API_KEY_SECRET_KEY = "SLAB_API_KEY"
 
 # Request field CONFIRMED from OpusSLABPythonSDK README: `userAliases`.
-# NOTE: the SUPPORTED integration is the OpusSLABPythonSDK Brazil/Coral
-# client (boto3 "opusslab" service, endpoint from coral-config, SigV4a
-# signing via aws-crt-python). This hand-rolled HTTPS client is an INTERIM
-# option only; it needs the raw prod endpoint URL and SigV4a (not the v4
-# used below). See docs/slab_onboarding_request.md for the decision.
+# Response field CONFIRMED from the OpusSLABModel Smithy contract: an
+# `aliasToSlackIdMap` list of {alias, slackId, isActive} objects, plus the
+# `aliasesNotFound` / `aliasesUnprocessed` string lists.
 REQUEST_ALIASES_FIELD = "userAliases"
-RESPONSE_RESULTS_FIELD = "slackIds"          # map/list of resolved results (confirm via OpenAPI)
+RESPONSE_RESULTS_FIELD = "aliasToSlackIdMap"
 RESPONSE_NOT_FOUND_FIELD = "aliasesNotFound"
 RESPONSE_UNPROCESSED_FIELD = "aliasesUnprocessed"
 
@@ -111,9 +123,17 @@ def _load_api_key() -> str:
         return ""
 
     secret_id = _get_api_key_secret_id()
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or _get_region()
+    # NB: do NOT fall back to _get_region() here — that returns the SLAB
+    # SigV4a region-set ("*"), which is not a valid AWS region. Use an
+    # explicit AWS region if provided, else let boto3 resolve it (env /
+    # IMDS / config) — on EC2 that yields the instance region.
+    region = (os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "").strip()
     try:
-        client = boto3.client("secretsmanager", region_name=region)
+        client = (
+            boto3.client("secretsmanager", region_name=region)
+            if region
+            else boto3.client("secretsmanager")
+        )
         raw = client.get_secret_value(SecretId=secret_id).get("SecretString", "")
     except Exception as exc:
         logger.debug("Could not load SLAB API key from Secrets Manager (%s): %s", secret_id, exc)
@@ -134,30 +154,45 @@ def _load_api_key() -> str:
 
 
 def _signed_headers(body: str, api_key: str) -> dict:
-    """Build SigV4-signed headers (instance-role creds) plus the API key."""
-    from botocore.auth import SigV4Auth
+    """Build SigV4a-signed headers (instance-role creds) plus the API key.
+
+    SLAB sits behind a multi-region active-active API Gateway with
+    latency-based DNS, so we sign asymmetrically (SigV4a) with a region-set
+    of "*": the signature is accepted at whichever regional gateway the
+    request lands on. Needs ``awscrt`` (botocore's CRT signer) — the same
+    dependency the boto3 ``opusslab`` SDK relies on for v4a.
+    """
     from botocore.awsrequest import AWSRequest
     import boto3
 
+    try:
+        from botocore.crt.auth import CrtSigV4AsymAuth
+    except ImportError as exc:  # pragma: no cover — awscrt is a runtime dep
+        raise RuntimeError(
+            "SigV4a signing needs the 'awscrt' package (pip install awscrt)"
+        ) from exc
+
     credentials = boto3.Session().get_credentials()
     if credentials is None:
-        raise RuntimeError("No AWS credentials available for SigV4 signing")
+        raise RuntimeError("No AWS credentials available for SigV4a signing")
 
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["x-api-key"] = api_key
 
     aws_req = AWSRequest(method="POST", url=_get_endpoint(), data=body, headers=headers)
-    SigV4Auth(credentials, _get_service_name(), _get_region()).add_auth(aws_req)
+    CrtSigV4AsymAuth(credentials, _get_service_name(), _get_region()).add_auth(aws_req)
     return dict(aws_req.headers)
 
 
 def _parse_results(data: dict) -> dict:
     """Normalize the SLAB success payload to a ``{alias: slack_id}`` map.
 
-    Handles either a dict ({alias: id}) or a list of objects
-    ([{"alias": a, "slackId": s}, ...]) under RESPONSE_RESULTS_FIELD,
-    since the exact shape is confirmed at onboarding.
+    The ``OpusUsersGetSlackIDFromAlias`` response carries an
+    ``aliasToSlackIdMap`` list of ``{alias, slackId, isActive}`` objects
+    (OpusSLABModel Smithy contract). Entries whose ``isActive`` is
+    explicitly False are treated as not-found — an inactive user won't
+    receive a DM anyway. A dict shape ({alias: id}) is tolerated defensively.
     """
     results = (data or {}).get(RESPONSE_RESULTS_FIELD)
     mapping: dict = {}
@@ -168,6 +203,8 @@ def _parse_results(data: dict) -> dict:
     elif isinstance(results, list):
         for item in results:
             if not isinstance(item, dict):
+                continue
+            if item.get("isActive") is False:
                 continue
             alias = item.get("alias")
             slack_id = item.get("slackId") or item.get("slack_id") or item.get("id")

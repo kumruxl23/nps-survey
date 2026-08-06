@@ -1,5 +1,6 @@
 flask==3.1.1
 boto3>=1.35.0
+awscrt>=0.19.0  # SigV4a signing for SLAB (alias->Slack ID) — botocore CRT signer
 requests>=2.31.0
 apscheduler>=3.10.0
 openpyxl>=3.1.0

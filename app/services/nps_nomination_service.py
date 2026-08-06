@@ -272,6 +272,23 @@ def lookup_person(org_id: str, alias: str) -> dict | None:
     return _lookup_from_history(org_id, email)
 
 
+def resolve_home_org(alias: str, org_ids: list[str]) -> str:
+    """The org a person belongs to: the first org where their leader resolves.
+
+    Walks ``org_ids`` in order and returns the first org where
+    :func:`lookup_person` finds the alias with a non-empty leader (roster
+    self-resolution, PAPI manager chain, or nomination history). Returns
+    '' when the alias resolves nowhere — callers should fall back to their
+    default org behavior. Someone appearing in several orgs' records gets
+    the first match (active-org listing order).
+    """
+    for org_id in org_ids:
+        person = lookup_person(org_id, alias)
+        if person and (person.get("leader") or "").strip():
+            return org_id
+    return ""
+
+
 def list_nominations_for_leader(org_id: str, cycle_id: str, leader: str) -> list[Nomination]:
     """Return nominations under one leader for the given org/cycle."""
     leader = (leader or "").strip()

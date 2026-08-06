@@ -1,6 +1,115 @@
 {% extends "base.html" %}
 {% block title %}Nominate Stakeholders - NPS Survey{% endblock %}
 
+{% block head %}
+<style>
+  /* Visual restyle only — matches the dashboard design system. */
+  .nom-title { font-weight: 700; font-size: 22px; color: var(--text-primary); }
+  .nom-side-heading {
+    font-weight: 600; font-size: 14px; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-label); margin-bottom: 12px;
+  }
+  .nom-total-card {
+    background: var(--card-bg); box-shadow: var(--card-shadow);
+    border-radius: 16px; padding: 16px; margin-bottom: 16px;
+  }
+  .nom-total-card .label {
+    text-transform: uppercase; font-size: 11px; font-weight: 500; color: var(--text-label);
+  }
+  .nom-total-card .num { font-weight: 800; font-size: 36px; color: var(--primary-accent); }
+  .leader-count-card {
+    background: var(--card-bg); box-shadow: var(--card-shadow);
+    border-radius: 12px; padding: 12px 16px; margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: center;
+    transition: all 0.2s;
+  }
+  .leader-count-card:hover { box-shadow: 0 4px 6px rgba(0,0,0,0.08); transform: translateY(-1px); }
+  .leader-count-card.current { border-left: 3px solid var(--primary-accent); }
+  .leader-count-card .name { font-weight: 500; font-size: 14px; color: var(--text-primary); }
+  .leader-count-card .count { font-weight: 700; font-size: 18px; color: var(--primary-accent); }
+  .leader-count-card .count.zero { color: var(--text-secondary); }
+  .nom-card {
+    background: var(--card-bg); box-shadow: var(--card-shadow);
+    border-radius: 16px; padding: 24px; border: 0;
+  }
+  .nom-card .form-control, .nom-card .form-select { border-radius: 8px; border: 1px solid #E2E8F0; }
+  .nom-card .btn { border-radius: 8px; }
+  #submit-btn { font-weight: 600; }
+  .nom-actions .btn { border-radius: 8px; font-size: 13px; font-weight: 500; }
+  #viewer-banner {
+    background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 12px;
+    padding: 12px 20px; font-size: 13px;
+  }
+  #active-cycle-banner { border-radius: 8px; font-weight: 500; font-size: 13px; }
+  .nom-table-heading { font-weight: 600; font-size: 16px; color: var(--text-primary); margin-bottom: 12px; }
+  #nominations-card thead th {
+    background: #F8FAFC; font-weight: 600; font-size: 13px;
+    text-transform: uppercase; color: var(--text-label);
+  }
+  #nominations-card tbody tr:hover { background: #F8FAFC; }
+  #nominations-card .btn-outline-danger { border-radius: 6px; padding: 4px 10px; }
+  /* Nomination guidelines card */
+  .guidelines-card { border-left: 3px solid var(--primary-accent); }
+  .guide-toggle { border: 0; background: transparent; cursor: pointer; font-size: 14px; color: var(--text-secondary); padding: 0 6px 0 0; }
+  .guide-body { max-height: 1200px; overflow: hidden; transition: max-height 0.3s ease; }
+  .guide-body.collapsed { max-height: 0; }
+  .guide-row {
+    display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid #F1F5F9;
+    font-size: 14px; color: var(--text-primary); line-height: 1.5;
+  }
+  .guide-row:last-child { border-bottom: 0; }
+  .guide-bullet { color: var(--primary-accent); font-weight: 600; }
+  .guide-tip { background: #F0F9FF; border-radius: 8px; padding: 10px 14px; margin-top: 8px; border-bottom: 0; }
+  .guide-edit-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
+  .guide-edit-row .g-type { width: 90px; flex: 0 0 auto; }
+  .guide-edit-row .g-text { flex: 1; }
+  /* Nomination deadline countdown */
+  .countdown-card {
+    background: var(--card-bg); box-shadow: var(--card-shadow);
+    border-radius: 16px; padding: 16px 24px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .countdown-card.warn { border-left: 3px solid var(--passive); }
+  .countdown-card.urgent { border-left: 3px solid var(--detractor); }
+  .countdown-card.closed { background: #F1F5F9; }
+  .countdown-title { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+  .countdown-sub { font-size: 13px; color: var(--text-secondary); }
+  .countdown-boxes { display: flex; gap: 8px; }
+  .cd-box {
+    background: var(--bg-canvas); border: 1px solid #E2E8F0; border-radius: 10px;
+    padding: 10px 14px; text-align: center; min-width: 60px;
+  }
+  .cd-box .num { font-weight: 800; font-size: 24px; color: var(--text-primary); }
+  .countdown-card.warn .cd-box .num { color: var(--passive); }
+  .countdown-card.urgent .cd-box .num { color: var(--detractor); }
+  .cd-box .lbl {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-label); font-weight: 600;
+  }
+  .pulse-dot {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--detractor); margin-right: 6px; animation: cd-pulse 1s infinite;
+  }
+  @keyframes cd-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .pencil-btn { border: 0; background: transparent; cursor: pointer; font-size: 12px; opacity: 0.5; padding: 0 4px; }
+  .pencil-btn:hover { opacity: 1; }
+  .settings-toast {
+    position: fixed; top: 76px; right: 24px; z-index: 2000;
+    padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    box-shadow: var(--card-shadow);
+    animation: toastFade 2.2s forwards;
+  }
+  .settings-toast.ok { background: #DCFCE7; color: #166534; }
+  .settings-toast.err { background: #FEE2E2; color: #991B1B; }
+  @keyframes toastFade { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+  @media (max-width: 768px) {
+    .cd-box { padding: 6px 8px; }
+    .cd-box .num { font-size: 18px; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <!-- Prominent active-cycle banner (top of page) -->
 <div id="active-cycle-banner" class="alert alert-info d-flex align-items-center gap-2 mb-3">
@@ -8,37 +117,65 @@
   <span id="active-cycle-text">…</span>
 </div>
 
-<div class="row g-3">
+<!-- Nomination deadline countdown (below the cycle banner) -->
+<div id="deadline-card" class="countdown-card d-none">
+  <div>
+    <div class="countdown-title">
+      <span id="countdown-label">&#9200; Nomination Deadline</span>
+      <button id="countdown-label-edit" class="pencil-btn d-none" type="button" title="Edit label">&#9999;&#65039;</button>
+    </div>
+    <div class="countdown-sub">
+      <span id="deadline-date-text">Closes: …</span>
+      <button id="deadline-edit" class="pencil-btn d-none" type="button" title="Edit deadline">&#9999;&#65039;</button>
+    </div>
+    <div id="deadline-edit-panel" class="d-none mt-2">
+      <input type="datetime-local" id="deadline-input" class="form-control form-control-sm d-inline-block" style="width:auto">
+      <button id="deadline-save" class="btn btn-sm btn-success" type="button">&#10003;</button>
+      <button id="deadline-cancel" class="btn btn-sm btn-outline-secondary" type="button">&#10007;</button>
+    </div>
+  </div>
+  <div class="countdown-boxes" id="countdown-boxes">
+    <div class="cd-box"><div class="num" id="cd-days">–</div><div class="lbl">Days</div></div>
+    <div class="cd-box"><div class="num" id="cd-hours">–</div><div class="lbl">Hrs</div></div>
+    <div class="cd-box"><div class="num" id="cd-mins">–</div><div class="lbl">Mins</div></div>
+    <div class="cd-box"><div class="num" id="cd-secs">–</div><div class="lbl">Secs</div></div>
+  </div>
+</div>
+
+<div class="row g-4">
   <!-- Left: per-leader nomination counts (visible to everyone) -->
   <div class="col-lg-3">
-    <div class="card">
-      <div class="card-header py-2">
-        <strong>Nominations by leader</strong>
-        <div class="form-text m-0" id="counts-cycle-info"></div>
-      </div>
-      <div class="card-body p-0">
-        <table class="table table-sm mb-0">
-          <thead class="table-light">
-            <tr><th class="ps-3">Leader</th><th class="text-end pe-3">Noms</th></tr>
-          </thead>
-          <tbody id="leader-counts-body">
-            <tr><td colspan="2" class="text-muted text-center py-3">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
+    <div class="nom-total-card">
+      <div class="label">Total Nominations</div>
+      <div class="num" id="total-noms"><div class="skeleton" style="height:36px;width:80px"></div></div>
+    </div>
+    <div class="nom-side-heading">
+      Nominations by Leader
+      <div class="form-text m-0" id="counts-cycle-info"></div>
+    </div>
+    <div id="leader-counts-body">
+      <!-- Shimmer mini-cards until the counts load -->
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
     </div>
   </div>
 
   <!-- Right: nomination form + lists -->
   <div class="col-lg-9">
     <div class="d-flex justify-content-between align-items-start">
-      <h4 class="mb-1">Nominate Stakeholders</h4>
-      <div>
+      <h4 class="mb-1 nom-title">Nominate Stakeholders</h4>
+      <div class="nom-actions">
         <button id="share-btn" class="btn btn-sm btn-outline-primary d-none">
           &#128279; Copy share link
         </button>
         <button id="invite-btn" class="btn btn-sm btn-outline-success d-none" data-bs-toggle="modal" data-bs-target="#invite-modal">
           &#9993; Invite leaders
+        </button>
+        <button id="notify-open-btn" class="btn btn-sm btn-outline-info d-none">
+          &#128227; Notify: nominations open (test)
         </button>
         <button id="remind-btn" class="btn btn-sm btn-outline-warning d-none">
           &#128276; Remind leaders (test)
@@ -53,13 +190,13 @@
 
     <div id="alert-area"></div>
 
-    <div class="alert alert-light border py-2" id="viewer-banner">
+    <div class="mb-3" id="viewer-banner">
       Nominating as <strong id="viewer-name">…</strong>
       <span id="viewer-leader-info"></span>
     </div>
 
-    <div class="card mb-3">
-      <div class="card-body">
+    <div class="nom-card mb-3">
+      <div>
         <div class="row g-3">
           <div class="col-md-6">
             <label class="form-label">Org</label>
@@ -101,11 +238,23 @@
       </div>
     </div>
 
-    <div class="card d-none" id="nominations-card">
-      <div class="card-header py-2">
-        <strong>Current nominations under <span id="table-leader-name">selected leader</span></strong>
+    <!-- Nomination guidelines (admin-editable, collapsible) -->
+    <div class="nom-card guidelines-card mb-3">
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="nom-table-heading m-0">
+          <button id="guide-toggle" class="guide-toggle" type="button" title="Collapse / expand">&#9662;</button>
+          &#128203; Nomination Guidelines
+        </div>
+        <button id="guide-edit-btn" class="btn btn-sm btn-outline-secondary d-none" type="button">&#9999;&#65039; Edit</button>
       </div>
-      <div class="card-body p-0">
+      <div class="guide-body" id="guide-body"></div>
+    </div>
+
+    <div class="nom-card d-none" id="nominations-card">
+      <div class="nom-table-heading">
+        Current nominations under <span id="table-leader-name">selected leader</span>
+      </div>
+      <div>
         <table class="table table-sm table-hover mb-0">
           <thead>
             <tr>
@@ -255,7 +404,7 @@ function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-let sharePaths = {};  // org_id -> capability path (admins/editors only)
+let sharePath = '';  // common capability path (admins/editors only)
 let viewer = { alias: '', privileged_orgs: {} };
 
 function isPrivileged() {
@@ -329,20 +478,25 @@ async function loadViewer() {
 async function loadContext() {
   const res = await fetch(withToken('/nps/nominate/context'));
   const data = await res.json();
-  sharePaths = data.share_paths || {};
+  sharePath = data.share_path || '';
   viewer = data.viewer || { alias: '', privileged_orgs: {} };
-  if (Object.keys(sharePaths).length) {
+  // can_switch_org is the admin-only flag from the context payload.
+  if (viewer.can_switch_org) {
+    document.getElementById('guide-edit-btn').classList.remove('d-none');
+    document.getElementById('deadline-edit').classList.remove('d-none');
+    document.getElementById('countdown-label-edit').classList.remove('d-none');
+  }
+  if (sharePath) {
     const btn = document.getElementById('share-btn');
     btn.classList.remove('d-none');
     document.getElementById('invite-btn').classList.remove('d-none');
+    document.getElementById('notify-open-btn').classList.remove('d-none');
     document.getElementById('remind-btn').classList.remove('d-none');
     btn.addEventListener('click', async () => {
-      const path = sharePaths[orgSelect.value];
-      if (!path) { showAlert('warning', 'No share link for this org.'); return; }
-      const url = location.origin + path;
+      const url = location.origin + sharePath;
       try {
         await navigator.clipboard.writeText(url);
-        showAlert('success', `Share link for <strong>${esc(activeOrg().org_name)}</strong> copied — it opens the form locked to this org only (no login needed).`);
+        showAlert('success', 'Common share link copied — one link for every org; each person lands on the org their identity resolves to (no login needed).');
       } catch (e) {
         prompt('Copy this link:', url);
       }
@@ -353,8 +507,14 @@ async function loadContext() {
   // Default to the first org that actually has an active cycle.
   const withCycle = orgs.find(o => o.active_cycle);
   if (withCycle) orgSelect.value = withCycle.org_id;
+  // Prefer the viewer's own (home) org when the server resolved one —
+  // admins can still switch away; non-admins arrive locked (below).
+  if (data.default_org && orgs.some(o => o.org_id === data.default_org)) {
+    orgSelect.value = data.default_org;
+  }
   if (data.locked_org) {
-    // Opened via an org share link: no org choice, show a static label.
+    // Locked to one org (share link, or a non-admin pinned to their home
+    // org): no org choice, show a static label instead of the selector.
     orgSelect.value = data.locked_org;
     orgSelect.classList.add('d-none');
     const lockedEl = document.getElementById('org-locked');
@@ -369,24 +529,31 @@ async function loadContext() {
 }
 
 // ── Per-leader counts (visible to everyone) ──────────────────────
+// Markup restyled to card boxes (visual change only — same endpoint/data).
 async function loadCounts() {
   const body = document.getElementById('leader-counts-body');
   const info = document.getElementById('counts-cycle-info');
-  if (!orgSelect.value) { body.innerHTML = ''; return; }
+  const totalEl = document.getElementById('total-noms');
+  if (!orgSelect.value) { body.innerHTML = ''; totalEl.textContent = '0'; return; }
   const res = await fetch(withToken(`/nps/nominate/leader-counts?org_id=${encodeURIComponent(orgSelect.value)}`));
   if (!res.ok) {
-    body.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Could not load</td></tr>';
+    body.innerHTML = '<div class="text-muted text-center py-3">Could not load</div>';
+    totalEl.textContent = '\u2014';
     return;
   }
   const data = await res.json();
   const rows = data.leaders || [];
   info.textContent = data.cycle_id ? '' : 'No active cycle';
+  totalEl.textContent = rows.reduce((a, r) => a + (r.count || 0), 0);
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">No leaders</td></tr>';
+    body.innerHTML = '<div class="text-muted text-center py-3">No leaders</div>';
     return;
   }
   body.innerHTML = rows.map(r =>
-    `<tr><td class="ps-3">${esc(r.leader)}</td><td class="text-end pe-3"><strong>${esc(r.count)}</strong></td></tr>`
+    `<div class="leader-count-card${r.leader === viewedLeader() ? ' current' : ''}">
+      <span class="name">${esc(r.leader)}</span>
+      <span class="count${r.count > 0 ? '' : ' zero'}">${esc(r.count)}</span>
+    </div>`
   ).join('');
 }
 
@@ -727,7 +894,27 @@ async function remindLeaders() {
   }
 }
 
+async function notifyNominationsOpen() {
+  const org = activeOrg() || {};
+  if (!confirm(`Send the "nominations are now OPEN" email + Slack notification to all leaders in ${org.org_name || 'this org'}?\n\nNotifications are redirected to each leader's test alias where set.`)) return;
+  const btn = document.getElementById('notify-open-btn');
+  btn.disabled = true;
+  const res = await fetch(withToken('/nps/leaders/notify-open'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ org_id: orgSelect.value, deadline: NOMINATION_DEADLINE || '' }),
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  if (res.ok) {
+    showAlert('success', `Nomination-open notification sent — email: <strong>${data.email_sent}</strong>, Slack: <strong>${data.slack_sent}</strong> of ${data.notifications.length} leader(s).`);
+  } else {
+    showAlert('danger', data.error || 'Could not send the nomination-open notification.');
+  }
+}
+
 orgSelect.addEventListener('change', () => { populateLeaders(); applyPrivilegeUI(); updateCycleInfo(); loadCounts(); loadViewer(); });
+document.getElementById('notify-open-btn').addEventListener('click', notifyNominationsOpen);
 document.getElementById('remind-btn').addEventListener('click', remindLeaders);
 leaderSelect.addEventListener('change', () => { updateAddButtons(); refreshTable(); });
 document.getElementById('stakeholder-alias').addEventListener('blur', onStakeholderBlur);
@@ -766,6 +953,256 @@ document.getElementById('prev-modal-body').addEventListener('click', async (ev) 
     btn.disabled = false; btn.textContent = 'Add';
   }
 });
+// ── persisted settings (shared /nps/settings blob) ─────────────────
+let SERVER_SETTINGS = {};  // carries dashboard-owned keys through saves
+
+function settingsToast(ok) {
+  const t = document.createElement('div');
+  t.className = 'settings-toast ' + (ok ? 'ok' : 'err');
+  t.textContent = ok ? '\u2713 Saved' : '\u274C Failed to save';
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2300);
+}
+
+async function loadSettings() {
+  try {
+    const res = await fetch('/nps/settings');
+    if (!res.ok) return;  // e.g. share-token visitor: defaults stay
+    const s = await res.json();
+    SERVER_SETTINGS = s;
+    if (Array.isArray(s.nomination_guidelines) && s.nomination_guidelines.length) {
+      NOMINATION_GUIDELINES = s.nomination_guidelines;
+      renderGuidelines();
+    }
+    if (s.nomination_deadline) {
+      NOMINATION_DEADLINE = s.nomination_deadline;
+      updateCountdown();
+    }
+  } catch (_) { /* defaults stay */ }
+}
+
+async function persistSettings() {
+  const payload = {
+    ...SERVER_SETTINGS,
+    nomination_guidelines: NOMINATION_GUIDELINES,
+    nomination_deadline: NOMINATION_DEADLINE,
+  };
+  delete payload.updated_at;
+  delete payload.updated_by;
+  try {
+    const r = await fetch('/nps/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    SERVER_SETTINGS = payload;
+    settingsToast(true);
+  } catch (_) {
+    settingsToast(false);  // edit stays for this session only
+  }
+}
+
+// ── Nomination guidelines (defaults below; overridden by persisted settings) ──
+let NOMINATION_GUIDELINES = [
+  { type: 'rule', text: 'Only L5+ People Managers can access and nominate stakeholders' },
+  { type: 'rule', text: 'Nominate stakeholders you have worked with in the last 6 months' },
+  { type: 'rule', text: 'One leader cannot nominate the same stakeholder twice' },
+  { type: 'rule', text: 'A stakeholder CAN be nominated by two different leaders' },
+  { type: 'rule', text: 'Complete all nominations before the deadline shown in the cycle banner' },
+  { type: 'rule', text: 'Minimum 5 nominations recommended per leader' },
+  { type: 'rule', text: 'Only active Amazon employees can be nominated' },
+  { type: 'tip', text: 'Use "Add from last cycle" to carry forward stakeholders who responded in the previous cycle' },
+];
+let guideEditing = false;
+let guideDraft = null;  // working copy while editing; Cancel discards it
+
+function renderGuidelines() {
+  const body = document.getElementById('guide-body');
+  if (!guideEditing) {
+    body.innerHTML = NOMINATION_GUIDELINES.map(g => g.type === 'tip'
+      ? `<div class="guide-row guide-tip"><strong>&#128161; Tip:</strong> <span>${esc(g.text)}</span></div>`
+      : `<div class="guide-row"><span class="guide-bullet">&bull;</span> <span>${esc(g.text)}</span></div>`
+    ).join('') || '<div class="text-muted small py-2">No guidelines configured.</div>';
+    return;
+  }
+  body.innerHTML = guideDraft.map((g, i) => `
+    <div class="guide-edit-row" data-index="${i}">
+      <select class="form-select form-select-sm g-type">
+        <option value="rule" ${g.type === 'rule' ? 'selected' : ''}>rule</option>
+        <option value="tip" ${g.type === 'tip' ? 'selected' : ''}>tip</option>
+      </select>
+      <input class="form-control form-control-sm g-text" value="${esc(g.text)}" placeholder="Guideline text" maxlength="200">
+      <button class="btn btn-sm btn-outline-danger g-delete" type="button" title="Delete">&#128465;&#65039;</button>
+    </div>`).join('') + `
+    <div class="mt-2">
+      <button id="guide-add-btn" class="btn btn-sm btn-outline-secondary" type="button">+ Add Guideline</button>
+      <button id="guide-save-btn" class="btn btn-sm btn-success ms-2" type="button">Save</button>
+      <button id="guide-cancel-btn" class="btn btn-sm btn-outline-secondary ms-2" type="button">Cancel</button>
+    </div>`;
+}
+
+function _readGuideRows() {
+  return [...document.querySelectorAll('#guide-body .guide-edit-row')].map(row => ({
+    type: row.querySelector('.g-type').value,
+    text: row.querySelector('.g-text').value.trim(),
+  }));
+}
+
+document.getElementById('guide-edit-btn').addEventListener('click', () => {
+  guideEditing = !guideEditing;
+  guideDraft = guideEditing ? NOMINATION_GUIDELINES.map(g => ({ ...g })) : null;
+  // Always expand while editing so the form is visible.
+  document.getElementById('guide-body').classList.remove('collapsed');
+  document.getElementById('guide-toggle').innerHTML = '&#9662;';
+  renderGuidelines();
+});
+document.getElementById('guide-body').addEventListener('click', (e) => {
+  if (e.target.closest('.g-delete')) {
+    guideDraft = _readGuideRows();  // keep in-progress typing
+    guideDraft.splice(Number(e.target.closest('.guide-edit-row').dataset.index), 1);
+    renderGuidelines();
+    return;
+  }
+  if (e.target.closest('#guide-add-btn')) {
+    guideDraft = _readGuideRows();
+    guideDraft.push({ type: 'rule', text: '' });
+    renderGuidelines();
+    return;
+  }
+  if (e.target.closest('#guide-save-btn')) {
+    NOMINATION_GUIDELINES = _readGuideRows().filter(g => g.text);  // drop blanks
+    guideEditing = false;
+    guideDraft = null;
+    renderGuidelines();
+    persistSettings();
+    return;
+  }
+  if (e.target.closest('#guide-cancel-btn')) {
+    guideEditing = false;
+    guideDraft = null;
+    renderGuidelines();
+  }
+});
+document.getElementById('guide-toggle').addEventListener('click', function(){
+  const body = document.getElementById('guide-body');
+  const collapsed = body.classList.toggle('collapsed');
+  this.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+});
+renderGuidelines();
+
+// ── Nomination deadline countdown ─────────────────────────────────
+// Default below; overridden by persisted settings (loadSettings).
+let NOMINATION_DEADLINE = '2026-09-08T23:59:59+05:30';  // IST deadline
+const NOMINATE_HEADINGS = { nomination_countdown: 'Nomination Deadline' };  // admin-editable
+
+function _fmtDeadline(d){
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function updateCountdown() {
+  const card = document.getElementById('deadline-card');
+  // Only meaningful while an org has an open nomination period.
+  const org = activeOrg();
+  if (!org || !org.active_cycle) { card.classList.add('d-none'); return; }
+  card.classList.remove('d-none');
+
+  const deadline = new Date(NOMINATION_DEADLINE);
+  const labelEl = document.getElementById('countdown-label');
+  const dateEl = document.getElementById('deadline-date-text');
+  const boxes = document.getElementById('countdown-boxes');
+  const editingLabel = !!labelEl.querySelector('input');  // don't clobber inline edit
+  card.classList.remove('warn', 'urgent', 'closed');
+  if (isNaN(deadline)) { card.classList.add('d-none'); return; }
+
+  const diff = deadline - new Date();
+  if (diff <= 0) {
+    card.classList.add('closed');
+    boxes.classList.add('d-none');
+    if (!editingLabel) labelEl.textContent = '\u274C Nomination Period Closed';
+    dateEl.textContent = 'Deadline was ' + _fmtDeadline(deadline);
+    return;
+  }
+  boxes.classList.remove('d-none');
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+  const pad = n => String(n).padStart(2, '0');
+  document.getElementById('cd-days').textContent = pad(days);
+  document.getElementById('cd-hours').textContent = pad(hours);
+  document.getElementById('cd-mins').textContent = pad(minutes);
+  document.getElementById('cd-secs').textContent = pad(seconds);
+  dateEl.textContent = 'Closes: ' + _fmtDeadline(deadline);
+
+  if (days < 3) {
+    card.classList.add('urgent');
+    if (!editingLabel) {
+      // Static markup + pulsing dot; no dynamic values interpolated here.
+      labelEl.innerHTML = '<span class="pulse-dot"></span>Nominations Closing Soon!';
+    }
+  } else {
+    if (days <= 7) card.classList.add('warn');
+    if (!editingLabel) {
+      labelEl.textContent = '\u23F0 ' + NOMINATE_HEADINGS.nomination_countdown;
+    }
+  }
+}
+
+// Admin: edit the deadline (inline datetime picker).
+function _dlToInput(d){
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+document.getElementById('deadline-edit').addEventListener('click', () => {
+  const d = new Date(NOMINATION_DEADLINE);
+  document.getElementById('deadline-input').value = isNaN(d) ? '' : _dlToInput(d);
+  document.getElementById('deadline-edit-panel').classList.toggle('d-none');
+});
+document.getElementById('deadline-save').addEventListener('click', () => {
+  const v = document.getElementById('deadline-input').value;
+  if (v) {
+    NOMINATION_DEADLINE = v;  // local-time ISO; Date() parses as local
+    persistSettings();
+  }
+  document.getElementById('deadline-edit-panel').classList.add('d-none');
+  updateCountdown();
+});
+document.getElementById('deadline-cancel').addEventListener('click', () => {
+  document.getElementById('deadline-edit-panel').classList.add('d-none');
+});
+
+// Admin: edit the countdown label (inline, Enter saves / Escape cancels).
+document.getElementById('countdown-label-edit').addEventListener('click', () => {
+  const labelEl = document.getElementById('countdown-label');
+  if (labelEl.querySelector('input')) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'form-control form-control-sm d-inline-block';
+  input.style.width = '220px';
+  input.maxLength = 60;
+  input.value = NOMINATE_HEADINGS.nomination_countdown;
+  labelEl.textContent = '';
+  labelEl.appendChild(input);
+  input.focus();
+  input.select();
+  const finish = (commit) => {
+    if (commit && input.value.trim()) {
+      NOMINATE_HEADINGS.nomination_countdown = input.value.trim();
+    }
+    input.remove();
+    updateCountdown();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
+  });
+});
+
+updateCountdown();
+setInterval(updateCountdown, 1000);
+
+loadSettings();
 loadContext();
 </script>
 {% endblock %}
