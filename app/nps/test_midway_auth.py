@@ -20,6 +20,15 @@ def aws_env(monkeypatch):
 _HDR = "X-Amzn-Oidc-Identity"
 
 
+@pytest.fixture(autouse=True)
+def _clear_access_cache():
+    """The access cache is module-level; clear it around each test."""
+    from app.services import nps_access_service
+    nps_access_service.invalidate()
+    yield
+    nps_access_service.invalidate()
+
+
 @pytest.fixture
 def client(monkeypatch):
     """Test client in Midway mode with one provisioned admin (kumruxl)."""

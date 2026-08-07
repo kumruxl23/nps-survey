@@ -365,6 +365,17 @@ def _is_privileged_for_org(org_id: str) -> bool:
     )
 
 
+def _session_scope_orgs():
+    """Org ids the current session may view, or None when unscoped.
+
+    None means 'no scope on the session' (admins, or legacy password
+    sessions) — callers fall back to admin-all / home-org resolution.
+    """
+    user = session.get("user", {}) or {}
+    orgs = user.get("nps_orgs")
+    return orgs if isinstance(orgs, list) else None
+
+
 def _viewer_resolved_leader(org_id: str) -> str:
     """The leader the current viewer files under (system-resolved), or ''."""
     viewer = getattr(g, "viewer_alias", "") or ""
@@ -372,6 +383,37 @@ def _viewer_resolved_leader(org_id: str) -> str:
         return ""
     person = nps_nomination_service.lookup_person(org_id, viewer)
     return ((person or {}).get("leader") or "").strip()
+
+
+def _nominate_level_denied():
+    """403 response when the current nominator is below L5, else None.
+
+    Admins and editors bypass the check (they manage the program). Everyone
+    else must be L5+ (PAPI job level) to nominate — an L4 who was granted a
+    view role still cannot nominate.
+    """
+    role = session.get("user", {}).get("role", "")
+    if role in ("admin", "editor"):
+        return None
+    from app.services import nps_access_service, papi_client
+
+    # Can't determine level without PAPI (local dev / tests) — don't block.
+    if not papi_client.is_configured():
+        return None
+
+    alias = getattr(g, "viewer_alias", "") or ""
+    level = None
+    try:
+        emp = papi_client.get_employee(alias) if alias else None
+        level = (emp or {}).get("level")
+    except papi_client.PapiError:
+        level = None
+    if not isinstance(level, int) or level < nps_access_service.MIN_AUTO_LEVEL:
+        return jsonify({
+            "error": f"Only L{nps_access_service.MIN_AUTO_LEVEL}+ employees can nominate. "
+                     f"If you believe this is an error, please contact an admin."
+        }), 403
+    return None
 
 
 def _viewer_owns_leader(org_id: str, leader: str) -> bool:
@@ -652,6 +694,7 @@ def nominate_context():
             "default_org": home_org,
             "viewer": {
                 "alias": viewer,
+                "role": session.get("user", {}).get("role", ""),
                 "can_switch_org": can_switch_org,
                 # Per-org full-visibility flag (admin/editor/roster leader).
                 "privileged_orgs": {
@@ -697,14 +740,20 @@ def nominate_list():
             return jsonify({"error": f"No active cycle for org '{org_id}'"}), 404
         from app.services.nomination_keys import base_email
 
-        rows = nps_nomination_service.list_nominations_for_leader(
-            org_id, cycle.cycle_id, leader
-        )
+        # "__ALL__" → every nomination for the cycle (admins/editors see all
+        # leaders at once, since the leader roster may not enumerate everyone).
+        if leader == "__ALL__":
+            rows = nps_nomination_service.list_nominations(org_id, cycle.cycle_id)
+        else:
+            rows = nps_nomination_service.list_nominations_for_leader(
+                org_id, cycle.cycle_id, leader
+            )
         return jsonify([
             {
                 "email": base_email(n.email),
                 "name": n.name,
                 "designation": n.designation,
+                "leader": n.leader,
                 "nominated_by": n.nominated_by,
                 "created_at": n.created_at,
             }
@@ -738,6 +787,11 @@ def nominate_submit():
         nominator = getattr(g, "viewer_alias", "") or ""
         if not nominator:
             return jsonify({"error": "Could not establish your identity"}), 401
+
+        # Only L5+ may nominate (admins/editors bypass).
+        denied = _nominate_level_denied()
+        if denied:
+            return denied
 
         # The leader is ALWAYS system-resolved from the nominator's org
         # records / manager chain — never client-chosen, for anyone. The
@@ -897,6 +951,11 @@ def nominate_bulk_submit():
         if not nominator:
             return jsonify({"error": "Could not establish your identity"}), 401
 
+        # Only L5+ may nominate (admins/editors bypass).
+        denied = _nominate_level_denied()
+        if denied:
+            return denied
+
         # Leader is the nominator's own resolved leader — never client-chosen.
         person = nps_nomination_service.lookup_person(org_id, nominator)
         leader = (person or {}).get("leader", "")
@@ -950,6 +1009,12 @@ def save_settings():
         if not isinstance(data, dict):
             return jsonify({"error": "Body must be a JSON object"}), 400
         result = nps_settings_service.save_dashboard_settings(data, _viewer_alias())
+        # user_access / org_heads may have changed → drop cached access decisions.
+        try:
+            from app.services import nps_access_service
+            nps_access_service.invalidate()
+        except Exception:
+            logger.exception("access cache invalidate after settings save failed")
         return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -1351,7 +1416,15 @@ def _feedback_scope():
       - otherwise my_leader_name is the leader the viewer maps to (roster);
         a regular leader sees ONLY their own rows. Empty name = sees nothing.
     """
-    role = session.get("user", {}).get("role", "")
+    user = session.get("user", {}) or {}
+    role = user.get("role", "")
+    if role in ("admin", "editor"):
+        return True, ""
+    # Midway session carries the resolved scope (super flag + leader name).
+    if "nps_super" in user:
+        return bool(user.get("nps_super")), (user.get("nps_leader") or "")
+    # Legacy (password) session fallback: admin_leaders are super; a roster
+    # leader sees only their own rows.
     viewer = (_viewer_alias() or "").strip().lower()
     try:
         super_leaders = [
@@ -1360,7 +1433,7 @@ def _feedback_scope():
         ]
     except Exception:
         super_leaders = []
-    is_super = role == "admin" or (bool(viewer) and viewer in super_leaders)
+    is_super = bool(viewer) and viewer in super_leaders
     my_leader_name = ""
     if not is_super and viewer:
         ld = nps_leader_service.get_leader(viewer)
@@ -1587,14 +1660,22 @@ def dashboard():
         role = session.get("user", {}).get("role", "")
         viewer = _viewer_alias()
         active = nps_org_config_service.list_active_orgs()
-        home_org = ""
-        if viewer:
-            home_org = nps_nomination_service.resolve_home_org(
-                viewer, [o.org_id for o in active]
-            )
-        visible = active if role == "admin" else [
-            o for o in active if o.org_id == home_org
-        ]
+        scope_orgs = _session_scope_orgs()
+        home_org = (session.get("user", {}) or {}).get("nps_home_org", "")
+        if role == "admin":
+            visible = active
+        elif scope_orgs is not None:
+            # Midway session carries the resolved org scope.
+            visible = [o for o in active if o.org_id in scope_orgs]
+            if not home_org and visible:
+                home_org = visible[0].org_id
+        else:
+            # Legacy (password) session: fall back to home-org resolution.
+            if viewer:
+                home_org = nps_nomination_service.resolve_home_org(
+                    viewer, [o.org_id for o in active]
+                )
+            visible = [o for o in active if o.org_id == home_org]
         available_cycles = {}
         for org in visible:
             cycles = sorted(
@@ -1620,12 +1701,22 @@ def dashboard():
                 alias = (ld.get("alias") or "").strip()
                 if name and alias:
                     leader_aliases[name] = alias
+        # Feedback tab is available to anyone with a feedback scope: admins,
+        # super-viewers, or a resolved leader (own rows only).
+        su = session.get("user", {}) or {}
+        viewer_can_feedback = (
+            role in ("admin", "editor")
+            or bool(su.get("nps_super"))
+            or bool(su.get("nps_leader"))
+            or bool(su.get("nps_orgs"))
+        )
         return render_template(
             "nps_dashboard.html",
             user_role=role,
             user_home_org=home_org,
             viewer_alias=viewer,
             leader_aliases=leader_aliases,
+            viewer_can_feedback=viewer_can_feedback,
             available_orgs=[
                 {"org_id": o.org_id, "org_name": o.org_name} for o in visible
             ],
@@ -1656,6 +1747,12 @@ def _dashboard_org_forbidden(org_id: str):
     """
     if session.get("user", {}).get("role") == "admin":
         return None
+    scope_orgs = _session_scope_orgs()
+    if scope_orgs is not None:
+        if org_id and org_id in scope_orgs:
+            return None
+        return jsonify({"error": "You can only view your own org's dashboard"}), 403
+    # Legacy (password) session: fall back to home-org resolution.
     viewer = _viewer_alias()
     home = ""
     if viewer:

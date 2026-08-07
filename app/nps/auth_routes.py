@@ -39,6 +39,15 @@ def _midway_enabled() -> bool:
     return os.environ.get("NPS_MIDWAY_AUTH") == "1"
 
 
+def _invalidate_access(alias: str = "") -> None:
+    """Drop the cached access decision so a grant change applies promptly."""
+    try:
+        from app.services import nps_access_service
+        nps_access_service.invalidate(alias)
+    except Exception:
+        logger.exception("access cache invalidate failed for %s", alias)
+
+
 def _midway_alias() -> str:
     """The Midway alias asserted by the ALB, or empty string."""
     return request.headers.get("X-Amzn-Oidc-Identity", "").strip().lower()
@@ -47,30 +56,66 @@ def _midway_alias() -> str:
 def _try_midway_auth() -> dict | None:
     """Populate the session from the ALB's verified Midway identity.
 
-    No-op unless NPS_MIDWAY_AUTH=1. Returns the user dict on success.
+    No-op unless NPS_MIDWAY_AUTH=1. Access is resolved centrally
+    (manual grants first, then live PAPI reporting) so leaders and their
+    reports are admitted automatically without a manual user record.
+    Returns the user dict on success, or None when the alias has no access.
     """
     if not _midway_enabled():
         return None
     alias = _midway_alias()
     if not alias:
         return None
-    user = auth_service.get_user(alias)
-    if not user:
+
+    from app.services import nps_access_service
+
+    acc = nps_access_service.resolve_access(alias)
+    if not acc or not acc.get("role"):
         return None
+
+    rec = auth_service.get_user(alias)
+    display_name = (rec or {}).get("display_name") or alias
+    user = {
+        "username": alias,
+        "role": acc["role"],
+        "display_name": display_name,
+        # Access scope carried on the session for the dashboard + feedback gates.
+        "nps_orgs": acc.get("orgs", []),
+        "nps_home_org": acc.get("home_org", ""),
+        "nps_leader": acc.get("leader_name", ""),
+        "nps_super": acc.get("is_super", False),
+        "nps_source": acc.get("source", ""),
+    }
     session["user"] = user
-    logger.info("Midway auto-login: %s (%s)", alias, user["role"])
+    logger.info("Midway auto-login: %s (%s via %s)", alias, acc["role"], acc.get("source"))
     return user
 
 
 # ── Decorators ───────────────────────────────────────────────────
 
 
+def _establish_session() -> None:
+    """Ensure session["user"] reflects CURRENT access.
+
+    In Midway mode we re-resolve from the ALB header on every request (backed
+    by a short cache) so grants and removals take effect promptly — a revoked
+    user's stale session is cleared here. In password mode we only auto-login
+    when there is no session yet.
+    """
+    if _midway_enabled() and _midway_alias():
+        # ALB always injects the identity header → re-resolve every request so
+        # a revoked grant clears the stale session immediately.
+        if not _try_midway_auth():
+            session.pop("user", None)
+    elif "user" not in session:
+        _try_midway_auth()
+
+
 def login_required(f):
     """Require any authenticated user."""
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        if "user" not in session:
-            _try_midway_auth()
+        _establish_session()
         if "user" not in session:
             if request.is_json or request.headers.get("Accept") == "application/json":
                 return jsonify({"error": "Authentication required"}), 401
@@ -84,8 +129,7 @@ def role_required(*roles):
     def decorator(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
-            if "user" not in session:
-                _try_midway_auth()
+            _establish_session()
             if "user" not in session:
                 if request.is_json:
                     return jsonify({"error": "Authentication required"}), 401
@@ -184,6 +228,7 @@ def add_user():
             role=data.get("role", "viewer"),
             display_name=data.get("display_name", ""),
         )
+        _invalidate_access(username)
         return jsonify(user), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -196,6 +241,7 @@ def update_role():
     try:
         data = request.json or {}
         auth_service.update_user_role(data.get("username", ""), data.get("role", ""))
+        _invalidate_access(data.get("username", ""))
         return jsonify({"status": "updated"})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -207,4 +253,5 @@ def delete_user():
     """Deactivate a user."""
     data = request.json or {}
     auth_service.delete_user(data.get("username", ""))
+    _invalidate_access(data.get("username", ""))
     return jsonify({"status": "deactivated"})

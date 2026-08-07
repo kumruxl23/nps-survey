@@ -129,17 +129,24 @@
   }
   /* Program Performance tab */
   .perf-targets { background: #F0F9FF; border: 1px solid #BAE6FD; }
-  /* Targets (left) + ranking (right), directly under the KPI boxes.
-     Ranking gets the wider column since its table has 8 columns. */
-  .perf-targets-rank { grid-template-columns: minmax(240px, 1fr) minmax(0, 1.9fr); align-items: start; }
-  @media (max-width: 992px) { .perf-targets-rank { grid-template-columns: 1fr; } }
+  .perf-targets-wrap { margin-bottom: 24px; }
+  /* Program Targets (left) aligned beside Category Distribution (right). */
+  .perf-targets-cat { align-items: stretch; }
   /* Per-org metric boxes */
   .perf-org-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .perf-org-card { border: 1px solid #E2E8F0; border-radius: 14px; padding: 16px; background: #fff; box-shadow: var(--card-shadow); }
+  .perf-org-card { position: relative; border: 1px solid #E2E8F0; border-radius: 14px; padding: 16px; background: #fff; box-shadow: var(--card-shadow); }
   .perf-org-card .org-name { font-weight: 700; font-size: 16px; margin-bottom: 12px; color: var(--text-primary); }
+  .perf-org-card .rank-badge {
+    position: absolute; top: 14px; right: 14px; min-width: 24px; height: 24px;
+    padding: 0 7px; border-radius: 12px; background: #EEF2FF; color: #3730A3;
+    font-size: 12px; font-weight: 800; display: inline-flex; align-items: center;
+    justify-content: center;
+  }
+  .perf-org-card .rank-badge.rank-1 { background: #FEF3C7; color: #92400E; }
   .perf-org-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
   .perf-org-metric .m-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .02em; }
   .perf-org-metric .m-value { font-size: 20px; font-weight: 800; }
+  .perf-org-metric .m-vs { font-size: 11px; font-weight: 700; margin-top: 1px; }
   .target-line-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
   .target-name { flex: 0 0 170px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
   .target-track { flex: 1; height: 12px; border-radius: 6px; background: #E2E8F0; overflow: hidden; }
@@ -233,12 +240,14 @@
   .fb-card .who .nm a:hover { color: #047857; }
   .fb-card .who .meta { font-size: 12px; color: var(--text-secondary); }
   .fb-score {
-    width: 46px; height: 46px; border-radius: 50%; flex: 0 0 auto;
+    min-width: 58px; padding: 7px 12px; border-radius: 12px; flex: 0 0 auto;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 17px; color: #fff; background: var(--rail, var(--promoter));
+    color: #fff; background: var(--rail, var(--promoter)); text-align: center;
     box-shadow: 0 3px 8px rgba(0,0,0,.15);
   }
-  .fb-score .cat { font-size: 8px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .9; }
+  .fb-score .num { font-size: 20px; font-weight: 800; line-height: 1; }
+  .fb-score .cat { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .95; margin-top: 3px; white-space: nowrap; }
+  .fb-card .fb-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary); display: block; margin-bottom: 3px; }
   .fb-card .quote { font-size: 14px; color: var(--text-primary); line-height: 1.55; }
   .fb-card .quote::before { content: '\201C'; color: var(--rail, var(--promoter)); font-size: 26px; font-weight: 800; line-height: 0; margin-right: 4px; vertical-align: -6px; }
   .fb-missing {
@@ -436,7 +445,14 @@
     <div class="chart-card prog-card">
       <div class="prog-heading">&#9881;&#65039; Admin</div>
       <p class="text-secondary" style="font-size:14px;">Tools for admins and designated leaders &mdash; export cycle data,
-        control which tables/sections show across the tool, and manage who can see this Admin tab.</p>
+        set performance targets, control which tables/sections show, and manage user access.</p>
+      <div class="row g-2 align-items-end" style="max-width:420px;">
+        <div class="col-auto">
+          <label class="form-label small mb-1">Admin scope &mdash; org for actions below</label>
+          <select id="adminOrg" class="form-select form-select-sm"></select>
+        </div>
+      </div>
+      <p class="text-secondary mt-2 mb-0" style="font-size:12px;">Applies to <em>User Access</em> grants below. Export &amp; Survey Phases have their own org pickers.</p>
     </div>
 
     <!-- Export cycle data (xlsx) -->
@@ -499,6 +515,34 @@
       </div>
     </div>
 
+    <!-- Performance targets per duration/cycle -->
+    <div class="chart-card prog-card" id="perfTargetsCard">
+      <div class="prog-heading">&#127919; Performance Targets</div>
+      <p class="text-secondary" style="font-size:14px;">Define NPS / Response Rate / Action Closure / Cycle-length targets per <strong>year</strong>
+        (a year's targets apply to both H1 and H2). The Program Performance page uses the matching
+        year, falling back to <em>Default</em> when a year has no target set.</p>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-2" id="targetsTable">
+          <thead class="table-light">
+            <tr>
+              <th style="min-width:170px;">Applies to</th>
+              <th>NPS &ge;</th>
+              <th>Response Rate &ge; (%)</th>
+              <th>Action Closure (%)</th>
+              <th>Cycle &le; (weeks)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="targetsRows"></tbody>
+        </table>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <button id="targetsAddBtn" class="btn btn-sm btn-outline-secondary" type="button">&#10133; Add target set</button>
+        <button id="targetsSaveBtn" class="btn btn-sm text-white" style="background:var(--primary-accent);" type="button">&#128190; Save targets</button>
+        <span id="targetsMsg" class="align-self-center small text-secondary"></span>
+      </div>
+    </div>
+
     <!-- Table/section visibility -->
     <div class="chart-card prog-card" id="visibilityCard">
       <div class="prog-heading">&#128065;&#65039; Table &amp; Section Visibility</div>
@@ -506,15 +550,66 @@
       <div id="visibilityList"></div>
     </div>
 
-    <!-- Admin access for designated leaders (admins only can edit) -->
-    <div class="chart-card prog-card" id="adminAccessCard">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <div class="prog-heading m-0">&#128100; Admin Access (leaders)</div>
-        <button id="adminLeadersEditBtn" class="btn btn-sm btn-outline-secondary d-none" type="button">&#9999;&#65039; Edit</button>
+    <!-- User access manager (admins only can edit) -->
+    <div class="chart-card prog-card" id="userAccessCard">
+      <div class="prog-heading">&#128100; User Access</div>
+      <p class="text-secondary" style="font-size:14px;">Type an alias to auto-fill the name, then choose access. Four modes:
+        <strong>Admin</strong> (full edit) &middot;
+        <strong>Viewer &mdash; one leader</strong> (pick org + a Specific leader: sees only that leader's feedback) &middot;
+        <strong>Viewer &mdash; one org</strong> (pick org, leave leader blank; add again for a 2nd/3rd org) &middot;
+        <strong>Viewer &mdash; all orgs</strong> (set Org to <em>All orgs</em>). Only Admin can edit.</p>
+
+      <!-- Add-grant row (admins only) -->
+      <div id="uaAddRow" class="row g-2 align-items-end mb-3 d-none">
+        <div class="col-auto" style="min-width:130px;">
+          <label class="form-label small mb-1">Alias</label>
+          <input id="uaAlias" class="form-control form-control-sm" placeholder="e.g. jdoe" autocomplete="off">
+          <div id="uaHint" class="form-text small"></div>
+        </div>
+        <div class="col-auto" style="min-width:180px;">
+          <label class="form-label small mb-1">Full name</label>
+          <input id="uaName" class="form-control form-control-sm" placeholder="Auto-fills from alias" autocomplete="off">
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">Access</label>
+          <select id="uaAccess" class="form-select form-select-sm">
+            <option value="admin">Admin (full edit)</option>
+            <option value="viewer">Viewer (read-only)</option>
+          </select>
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">Org</label>
+          <select id="uaOrg" class="form-select form-select-sm"></select>
+        </div>
+        <div class="col-auto" style="min-width:180px;">
+          <label class="form-label small mb-1">Specific leader (optional)</label>
+          <input id="uaLeader" class="form-control form-control-sm" list="uaLeaderList" placeholder="Alias or name" autocomplete="off">
+          <datalist id="uaLeaderList"></datalist>
+          <div id="uaLeaderHint" class="form-text small"></div>
+        </div>
+        <div class="col-auto">
+          <button id="uaAddBtn" class="btn btn-sm btn-outline-secondary" type="button">&#10133; Add</button>
+        </div>
       </div>
-      <p class="text-secondary" style="font-size:14px;">Aliases listed here can view this Admin tab (in addition to all admins).</p>
-      <div id="adminLeadersView"></div>
-      <div id="adminLeadersEdit" class="d-none"></div>
+
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-2" id="uaTable">
+          <thead class="table-light">
+            <tr>
+              <th style="min-width:180px;">Person</th>
+              <th>Access</th>
+              <th>Org</th>
+              <th>Specific leader</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="uaRows"></tbody>
+        </table>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <button id="uaSaveBtn" class="btn btn-sm text-white d-none" style="background:var(--primary-accent);" type="button">&#128190; Save access</button>
+        <span id="uaMsg" class="align-self-center small text-secondary"></span>
+      </div>
     </div>
   </div>
 
@@ -548,38 +643,21 @@
       <div class="stat-box"><div class="label">Detractors</div><div class="value nps-red" id="perfKpiDetractors">—</div></div>
     </div>
 
-    <!-- Program Targets (left) + Team Performance Ranking (right), directly below the KPI boxes -->
-    <div class="dash-donuts perf-targets-rank">
+    <!-- Program Targets, directly below the KPI boxes (ranking table removed;
+         teams are now shown as ranked metric boxes below, top to bottom). -->
+    <div class="dash-donuts perf-targets-cat">
       <div class="chart-card perf-targets" data-hideable="perf_targets" data-hide-label="Program Targets (Performance page)">
         <h6 data-heading="program_targets"></h6>
         <div id="perfTargets"></div>
       </div>
-      <div class="chart-card" data-hideable="perf_ranking" data-hide-label="Team Performance Ranking">
-        <h6 data-heading="program_ranking"></h6>
-        <table class="table table-sm table-hover mb-0">
-          <thead class="table-light">
-            <tr id="perfRankHead">
-              <th>Rank</th>
-              <th class="sortable" data-key="team">Team</th>
-              <th class="sortable text-center" data-key="nps">NPS</th>
-              <th class="text-center">vs Target</th>
-              <th class="sortable text-center" data-key="rr">Response Rate</th>
-              <th class="text-center">vs Target</th>
-              <th class="sortable text-center" data-key="closure">Actions Complete</th>
-              <th class="text-center">Trend</th>
-            </tr>
-          </thead>
-          <tbody id="perfRankBody">
-            <tr><td colspan="8" class="border-0 py-1"><div class="skeleton skeleton-row"></div></td></tr>
-            <tr><td colspan="8" class="border-0 py-1"><div class="skeleton skeleton-row"></div></td></tr>
-            <tr><td colspan="8" class="border-0 py-1"><div class="skeleton skeleton-row"></div></td></tr>
-          </tbody>
-        </table>
+      <div class="chart-card" data-hideable="perf_category" data-hide-label="Category Distribution by Team">
+        <h6 data-heading="program_category_dist"></h6>
+        <div class="chart-wrap"><canvas id="perfCatDist"></canvas></div>
       </div>
     </div>
 
-    <!-- Per-org metric boxes (each org's metrics from the ranking) -->
-    <div class="perf-org-grid" id="perfOrgBoxes" data-hideable="perf_org_boxes" data-hide-label="Per-Org Metric Boxes"></div>
+    <!-- Per-org metric boxes, ranked top (best NPS) to bottom, each with vs-target. -->
+    <div class="perf-org-grid" id="perfOrgBoxes" data-hideable="perf_org_boxes" data-hide-label="Per-Org Metric Boxes (ranked)"></div>
 
     <!-- Sections 2 + 3: per-team comparison bars -->
     <div class="dash-donuts" data-hideable="perf_comparison" data-hide-label="NPS / Response Rate by Team (bars)">
@@ -605,11 +683,6 @@
       </div>
     </div>
 
-    <!-- Section 6: category distribution -->
-    <div class="chart-card" data-hideable="perf_category" data-hide-label="Category Distribution by Team">
-      <h6 data-heading="program_category_dist"></h6>
-      <div class="chart-wrap"><canvas id="perfCatDist"></canvas></div>
-    </div>
   </div>
 
   <!-- Feedback pane (leaders see own; admins + super leaders see all) -->
@@ -898,6 +971,7 @@
     cyclesByOrg: {{ available_cycles | tojson }},
     viewer: {{ viewer_alias | tojson }},
     leaderAliases: {{ leader_aliases | tojson }},
+    canFeedback: {{ viewer_can_feedback | tojson }},
   };
 
   // ── state ────────────────────────────────────────────────────────
@@ -1084,8 +1158,11 @@
     el.innerHTML =
       `<li class="nav-item"><button class="nav-link ${activeTab === 'program' ? 'active' : ''}"
         data-tab="program" type="button">&#128203; Read Me</button></li>` +
-      `<li class="nav-item"><button class="nav-link ${activeTab === 'perf' ? 'active' : ''}"
-        data-tab="perf" type="button">&#128200; NPS Program Performance</button></li>` +
+      // Cross-org Program Performance is admin-only; leaders/viewers see their org(s) only.
+      (BOOT.role === 'admin'
+        ? `<li class="nav-item"><button class="nav-link ${activeTab === 'perf' ? 'active' : ''}"
+            data-tab="perf" type="button">&#128200; NPS Program Performance</button></li>`
+        : '') +
       BOOT.orgs.map(o =>
         `<li class="nav-item"><button class="nav-link ${activeTab === 'org' && o.org_id === ORG ? 'active' : ''}"
           data-org="${esc(o.org_id)}" type="button">${esc(o.org_name)}</button></li>`).join('') +
@@ -1099,6 +1176,21 @@
         : '');
   }
 
+  // Richer per-user access model (supersedes the flat admin_leaders list).
+  // Each grant: {alias, name, access:'admin'|'leader', org_id:'' (all), leader:'' (optional)}.
+  let USER_ACCESS = [];
+  let PERF_TARGETS = {};   // { 'default'|'<year>'|'<cycle label>': {nps, rr, closure, cycle_weeks} }
+  let ADMIN_LEADERS = [];  // derived: aliases with "view as admin" (see syncAdminLeaders)
+
+  // Aliases with "view as admin" access — drives the Admin-tab gate below.
+  // Kept in ADMIN_LEADERS so the existing isAdminViewer()/migration path works.
+  function syncAdminLeaders(){
+    ADMIN_LEADERS = (USER_ACCESS || [])
+      .filter(u => (u.access || '') === 'admin')
+      .map(u => String(u.alias || '').toLowerCase())
+      .filter(Boolean);
+  }
+
   function isAdminViewer(){
     if (BOOT.role === 'admin') return true;
     const v = (BOOT.viewer || '').toLowerCase();
@@ -1108,7 +1200,7 @@
     const v = (BOOT.viewer || '').toLowerCase();
     return !!v && Object.values(BOOT.leaderAliases || {}).map(a => String(a).toLowerCase()).includes(v);
   }
-  function canSeeFeedback(){ return isAdminViewer() || isLeaderViewer(); }
+  function canSeeFeedback(){ return isAdminViewer() || isLeaderViewer() || !!BOOT.canFeedback; }
 
   function updatePaneVisibility(){
     document.getElementById('programPane').classList.toggle('d-none', activeTab !== 'program');
@@ -1390,9 +1482,19 @@
       if (Array.isArray(s.target_history)) {
         TARGET_HISTORY = s.target_history;
       }
-      if (Array.isArray(s.admin_leaders)) {
-        ADMIN_LEADERS = s.admin_leaders;
+      if (s.perf_targets && typeof s.perf_targets === 'object') {
+        PERF_TARGETS = s.perf_targets;
       }
+      if (Array.isArray(s.user_access)) {
+        USER_ACCESS = s.user_access;
+      } else if (Array.isArray(s.admin_leaders)) {
+        // Migrate the old flat admin_leaders list into the richer model
+        // (each becomes an all-orgs "view as admin" grant).
+        USER_ACCESS = s.admin_leaders.map(a => ({
+          alias: String(a).toLowerCase(), name: '', access: 'admin', org_id: '', leader: '',
+        }));
+      }
+      syncAdminLeaders();
     } catch (_) { /* server unavailable: keep the hardcoded defaults */ }
   }
 
@@ -1407,7 +1509,9 @@
       hidden_sections: HIDDEN,
       action_taken: ACTION_TAKEN,
       target_history: TARGET_HISTORY,
-      admin_leaders: ADMIN_LEADERS,
+      perf_targets: PERF_TARGETS,
+      user_access: USER_ACCESS,
+      admin_leaders: ADMIN_LEADERS,   // kept in sync for older readers
     };
     delete payload.updated_at;
     delete payload.updated_by;
@@ -1800,9 +1904,8 @@
     PERF_SKELETON_IDS.forEach(id => document.getElementById(id).classList.toggle('skeleton', on));
     document.querySelectorAll('#perfPane .chart-wrap').forEach(w => w.classList.toggle('skeleton', on));
     if (on) {
-      // Shimmer placeholders for the ranking table + target scorecard;
-      // renderPerf() overwrites both once the aggregate arrives.
-      document.getElementById('perfRankBody').innerHTML = SKELETON_TABLE_ROWS(8, 3);
+      // Shimmer placeholder for the target scorecard; renderPerf() overwrites
+      // it once the aggregate arrives.
       document.getElementById('perfTargets').innerHTML =
         Array(4).fill('<div class="skeleton skeleton-row"></div>').join('');
     }
@@ -1861,25 +1964,50 @@
     renderPerfTrend('perfRrTrend', 'rr', 90, C.passive, '%');
     renderPerfCatDist(entry);
     renderPerfTargets(entry);
-    renderPerfRanking(entry);
     renderPerfOrgBoxes(entry);
+  }
+
+  // Resolve the numeric targets for a perf entry: admin-defined PERF_TARGETS
+  // override the built-in defaults, resolved most-specific first
+  // (exact cycle label > year > 'default').
+  function perfTargetsFor(entry){
+    const def = { nps: 80, rr: 90, closure: 100, cycle_weeks: 10 };
+    const t = (PERF_TARGETS && typeof PERF_TARGETS === 'object') ? PERF_TARGETS : {};
+    const label = (entry && entry.label) || '';
+    const year = (label.match(/\d{4}/) || [])[0] || '';
+    return Object.assign({}, def, t.default || {}, (year && t[year]) || {}, t[label] || {});
+  }
+
+  // Small "vs target" delta badge (green when at/above, red when below).
+  function vsTargetBadge(value, target, suffix){
+    if (value == null || target == null) return '';
+    const d = Math.round((value - target) * 10) / 10;
+    const cls = d >= 0 ? 't-met' : 't-below';
+    const sign = d >= 0 ? '+' : '';
+    const mark = d >= 0 ? '\u2705' : '\u274C';
+    return `<div class="m-vs ${cls}">${sign}${d}${suffix || ''} vs ${target}${suffix || ''} ${mark}</div>`;
   }
 
   function renderPerfOrgBoxes(entry){
     const el = document.getElementById('perfOrgBoxes');
     if (!el) return;
-    const teams = entry ? PERF_TEAMS.filter(tm => entry.orgs[tm]) : [];
+    let teams = entry ? PERF_TEAMS.filter(tm => entry.orgs[tm]) : [];
     if (!teams.length) { el.innerHTML = ''; return; }
-    const metric = (label, val, cls) =>
+    // Rank top-to-bottom by NPS (desc), so the grid flows best → worst.
+    teams = teams.slice().sort((a, b) => (entry.orgs[b].nps || 0) - (entry.orgs[a].nps || 0));
+    const tgt = perfTargetsFor(entry);
+    const metric = (label, val, cls, vs) =>
       `<div class="perf-org-metric"><div class="m-label">${label}</div>` +
-      `<div class="m-value ${cls || ''}">${val}</div></div>`;
-    el.innerHTML = teams.map(tm => {
+      `<div class="m-value ${cls || ''}">${val}</div>${vs || ''}</div>`;
+    el.innerHTML = teams.map((tm, i) => {
       const o = entry.orgs[tm];
+      const rank = i + 1;
       return `<div class="perf-org-card">
+        <span class="rank-badge rank-${rank}" title="Rank by NPS">#${rank}</span>
         <div class="org-name">${esc(tm)}</div>
         <div class="perf-org-metrics">
-          ${metric('NPS', esc(o.nps), npsClass(o.nps))}
-          ${metric('Response Rate', esc(o.rr) + '%')}
+          ${metric('NPS', esc(o.nps), npsClass(o.nps), vsTargetBadge(o.nps, tgt.nps, ''))}
+          ${metric('Response Rate', esc(o.rr) + '%', '', vsTargetBadge(o.rr, tgt.rr, '%'))}
           ${metric('Promoters', esc(o.promoters || 0), 'nps-green')}
           ${metric('Passives', esc(o.passives || 0), 'nps-amber')}
           ${metric('Detractors', esc(o.detractors || 0), 'nps-red')}
@@ -1993,16 +2121,21 @@
 
   function renderPerfTargets(entry){
     const t = (entry || {}).totals || {};
+    const g = perfTargetsFor(entry);   // admin-defined targets (or defaults)
+    // Heading tracks the selected cycle's year (falls back to a generic title).
+    const _yr = ((entry && entry.label) || '').match(/\d{4}/);
+    const _head = document.querySelector('#perfPane h6[data-heading="program_targets"]');
+    if (_head) _head.textContent = '\uD83C\uDFAF ' + (_yr ? _yr[0] + ' ' : '') + 'Program Targets';
     const rows = [
-      { name: 'NPS \u2265 80', value: t.nps ?? 0, target: 80, pct: t.nps ?? 0,
-        label: `${t.nps ?? 0} / 80` },
-      { name: 'Response Rate \u2265 90%', value: t.rr ?? 0, target: 90, pct: t.rr ?? 0,
-        label: `${t.rr ?? 0}% / 90%` },
-      { name: 'Action Closure 100%', value: t.closure ?? 100, target: 100, pct: t.closure ?? 100,
-        label: `${t.closure ?? 100}% / 100%` },
+      { name: `NPS \u2265 ${g.nps}`, value: t.nps ?? 0, target: g.nps, pct: t.nps ?? 0,
+        label: `${t.nps ?? 0} / ${g.nps}` },
+      { name: `Response Rate \u2265 ${g.rr}%`, value: t.rr ?? 0, target: g.rr, pct: t.rr ?? 0,
+        label: `${t.rr ?? 0}% / ${g.rr}%` },
+      { name: `Action Closure ${g.closure}%`, value: t.closure ?? 100, target: g.closure, pct: t.closure ?? 100,
+        label: `${t.closure ?? 100}% / ${g.closure}%` },
       // No cycle-length tracking yet — reported at target.
-      { name: 'Cycle \u2264 10 weeks', value: 10, target: 10, pct: 100,
-        label: '10 wks / 10 wks', invert: true },
+      { name: `Cycle \u2264 ${g.cycle_weeks} weeks`, value: g.cycle_weeks, target: g.cycle_weeks, pct: 100,
+        label: `${g.cycle_weeks} wks / ${g.cycle_weeks} wks`, invert: true },
     ];
     document.getElementById('perfTargets').innerHTML = rows.map(r => {
       const met = r.invert ? r.value <= r.target : r.value >= r.target;
@@ -2022,6 +2155,7 @@
 
   function renderPerfRanking(entry){
     const body = document.getElementById('perfRankBody');
+    if (!body) return;  // ranking table removed — boxes are ranked instead
     if (!entry) {
       body.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No data for this cycle</td></tr>';
       return;
@@ -3195,7 +3329,10 @@
       b.classList.toggle('active', b.dataset.view === PERF.view));
     renderPerf();  // no refetch needed — view is a client-side regrouping
   });
-  document.getElementById('perfRankHead').addEventListener('click', (e) => {
+  // Ranking table was removed (teams are shown as ranked boxes now); the
+  // sortable-header handler is only wired if the element still exists.
+  const _perfRankHead = document.getElementById('perfRankHead');
+  if (_perfRankHead) _perfRankHead.addEventListener('click', (e) => {
     const th = e.target.closest('th.sortable');
     if (!th) return;
     const key = th.dataset.key;
@@ -3297,7 +3434,7 @@
       // Only admins can toggle/persist visibility — hide that card for others.
       document.getElementById('visibilityCard').classList.add('d-none');
     }
-    if (isAdminViewer()) { initExport(); renderAdminLeaders(); }
+    if (isAdminViewer()) { initAdminScope(); initExport(); initPerfTargets(); initUserAccess(); }
     if (BOOT.role === 'admin') { initPhases(); }
     renderTabs();
     renderHeadings();
@@ -3519,53 +3656,305 @@
     });
   })();
 
-  // ── admin access for designated leaders (admins edit; grants Admin tab) ──
-  let ADMIN_LEADERS = [];   // [alias, ...]
-  let alEditing = false;
-
-  function renderAdminLeaders(){
-    const view = document.getElementById('adminLeadersView');
-    const panel = document.getElementById('adminLeadersEdit');
-    const editBtn = document.getElementById('adminLeadersEditBtn');
-    if (!view || !panel) return;
-    editBtn.classList.toggle('d-none', BOOT.role !== 'admin');
-    if (!alEditing) {
-      panel.classList.add('d-none'); view.classList.remove('d-none');
-      editBtn.textContent = '\u270F\uFE0F Edit';
-      view.innerHTML = (ADMIN_LEADERS && ADMIN_LEADERS.length)
-        ? `<div class="d-flex flex-wrap gap-2">${ADMIN_LEADERS.map(a =>
-            `<span class="team-pill">${esc(a)}</span>`).join('')}</div>`
-        : `<div class="text-muted small">No designated leaders yet${BOOT.role === 'admin' ? ' \u2014 click Edit to add.' : '.'}</div>`;
-      return;
-    }
-    view.classList.add('d-none'); panel.classList.remove('d-none');
-    editBtn.textContent = 'Editing\u2026';
-    panel.innerHTML = `
-      <label class="form-label small">Aliases (one per line)</label>
-      <textarea id="alText" class="form-control form-control-sm" rows="4">${esc((ADMIN_LEADERS || []).join('\n'))}</textarea>
-      <div class="mt-2">
-        <button id="alSave" class="btn btn-sm text-white" style="background:var(--primary-accent);" type="button">Save</button>
-        <button id="alCancel" class="btn btn-sm btn-outline-secondary ms-2" type="button">Cancel</button>
-      </div>`;
+  // ── admin org scope (drives the org-specific actions below) ──────────
+  function adminScopeOrg(){
+    const sel = document.getElementById('adminOrg');
+    return sel ? sel.value : '';
+  }
+  function orgNameOf(id){
+    if (!id) return 'All orgs';
+    const o = BOOT.orgs.find(x => x.org_id === id);
+    return o ? o.org_name : id;
+  }
+  function initAdminScope(){
+    const sel = document.getElementById('adminOrg');
+    if (!sel) return;
+    sel.innerHTML = `<option value="">All orgs</option>` +
+      BOOT.orgs.map(o => `<option value="${esc(o.org_id)}">${esc(o.org_name)}</option>`).join('');
+    if (ORG && BOOT.orgs.some(o => o.org_id === ORG)) sel.value = ORG;
+    sel.addEventListener('change', () => {
+      const ua = document.getElementById('uaOrg');
+      if (ua) ua.value = sel.value;
+      renderUserAccessRows();
+    });
   }
 
-  (function wireAdminLeaders(){
-    const editBtn = document.getElementById('adminLeadersEditBtn');
-    const panel = document.getElementById('adminLeadersEdit');
-    if (!editBtn || !panel) return;
-    editBtn.addEventListener('click', () => { if (BOOT.role === 'admin') { alEditing = true; renderAdminLeaders(); } });
-    panel.addEventListener('click', (e) => {
-      if (e.target.closest('#alCancel')) { alEditing = false; renderAdminLeaders(); return; }
-      if (e.target.closest('#alSave')) {
-        ADMIN_LEADERS = document.getElementById('alText').value
-          .split('\n').map(s => s.trim().toLowerCase().split('@')[0]).filter(Boolean);
-        alEditing = false;
-        renderAdminLeaders();
-        renderTabs();          // access list may change who sees the Admin tab
-        persistSettings();
+  // ── user access manager (alias autocomplete + per-org/leader grants) ──
+  function renderUserAccessRows(){
+    const body = document.getElementById('uaRows');
+    if (!body) return;
+    const canEdit = BOOT.role === 'admin';
+    // Always list ALL grants (the Admin-scope org only defaults the add-row
+    // org — it must not hide existing grants for other orgs).
+    const rows = (USER_ACCESS || []).map((u, i) => ({ u, i }));
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="text-muted small py-2">No access grants yet.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map(({ u, i }) => `
+      <tr>
+        <td>${esc(u.name || '\u2014')} <span class="text-muted small">(${esc(u.alias || '')})</span></td>
+        <td><span class="team-pill">${u.access === 'admin' ? 'Admin' : 'Viewer'}</span></td>
+        <td>${esc(orgNameOf(u.org_id))}</td>
+        <td>${esc(u.leader || '\u2014')}</td>
+        <td>${canEdit ? `<button type="button" class="btn btn-sm btn-outline-danger ua-del" data-i="${i}" title="Remove">&#10005;</button>` : ''}</td>
+      </tr>`).join('');
+  }
+
+  async function uaPrefill(alias){
+    const org = adminScopeOrg() || (BOOT.orgs[0] && BOOT.orgs[0].org_id) || '';
+    if (!alias || !org) return null;
+    try {
+      const res = await fetch(`/nps/nominate/prefill?org_id=${encodeURIComponent(org)}&alias=${encodeURIComponent(alias)}`);
+      if (!res.ok) return null;
+      const d = await res.json();
+      return d.found ? d : null;
+    } catch (_) { return null; }
+  }
+
+  // Map the dashboard access level to the server login role.
+  // "View as Admin" => admin, "View as Leader" => viewer (dashboard read).
+  function accessToServerRole(access){ return access === 'admin' ? 'admin' : 'viewer'; }
+
+  // Actually provision (or update) the server-side login record so the
+  // person can sign in via Midway. Client-side USER_ACCESS alone does NOT
+  // grant login — this is what makes access real.
+  async function provisionServerUser(alias, role, name){
+    try {
+      let r = await fetch('/nps/auth/users/add', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: alias, role, display_name: name || '' }),
+      });
+      if (r.status === 400) {  // already exists — update the role instead
+        r = await fetch('/nps/auth/users/update-role', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: alias, role }),
+        });
       }
-    });
-  })();
+      return r.ok;
+    } catch (_) { return false; }
+  }
+
+  async function deprovisionServerUser(alias){
+    try {
+      const r = await fetch('/nps/auth/users/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: alias }),
+      });
+      return r.ok;
+    } catch (_) { return false; }
+  }
+
+  function initUserAccess(){
+    const card = document.getElementById('userAccessCard');
+    if (!card) return;
+    const canEdit = BOOT.role === 'admin';
+    const addRow = document.getElementById('uaAddRow');
+    const saveBtn = document.getElementById('uaSaveBtn');
+    const orgSel = document.getElementById('uaOrg');
+    const aliasEl = document.getElementById('uaAlias');
+    const nameEl = document.getElementById('uaName');
+    const hint = document.getElementById('uaHint');
+    const leaderList = document.getElementById('uaLeaderList');
+
+    if (orgSel) {
+      orgSel.innerHTML = `<option value="">All orgs</option>` +
+        BOOT.orgs.map(o => `<option value="${esc(o.org_id)}">${esc(o.org_name)}</option>`).join('');
+      orgSel.value = adminScopeOrg();
+    }
+    if (leaderList) {
+      leaderList.innerHTML = Object.keys(BOOT.leaderAliases || {})
+        .map(n => `<option value="${esc(n)}"></option>`).join('');
+    }
+    if (addRow) addRow.classList.toggle('d-none', !canEdit);
+    if (saveBtn) saveBtn.classList.toggle('d-none', !canEdit);
+
+    if (canEdit) {
+      aliasEl.addEventListener('blur', async () => {
+        const a = aliasEl.value.trim().toLowerCase().split('@')[0];
+        aliasEl.value = a;
+        hint.textContent = '';
+        if (!a) return;
+        const p = await uaPrefill(a);
+        if (p && p.name) { nameEl.value = p.name; hint.textContent = 'Name from directory \u2014 edit if needed.'; }
+        else { hint.textContent = 'Alias not found \u2014 type the name manually.'; }
+      });
+
+      // Specific-leader field: if an alias is typed (single token / has @),
+      // resolve it to the leader's full name from the directory.
+      const leaderEl = document.getElementById('uaLeader');
+      const leaderHint = document.getElementById('uaLeaderHint');
+      leaderEl.addEventListener('blur', async () => {
+        leaderHint.textContent = '';
+        let v = leaderEl.value.trim();
+        if (!v) return;
+        // A full name already picked (contains a space) is left as-is.
+        if (v.includes(' ') && !v.includes('@')) return;
+        const a = v.toLowerCase().split('@')[0];
+        const p = await uaPrefill(a);
+        if (p && p.name) { leaderEl.value = p.name; leaderHint.textContent = 'Resolved from alias.'; }
+        else { leaderHint.textContent = 'Alias not found \u2014 type the name.'; }
+      });
+      const msg = document.getElementById('uaMsg');
+      const setMsg = (text, kind) => {
+        msg.textContent = text;
+        msg.className = 'align-self-center small text-' + (kind || 'secondary');
+      };
+
+      document.getElementById('uaAddBtn').addEventListener('click', async () => {
+        const alias = aliasEl.value.trim().toLowerCase().split('@')[0];
+        const name = nameEl.value.trim();
+        if (!alias) { alert('Enter an alias first.'); return; }
+        const grant = {
+          alias, name,
+          access: document.getElementById('uaAccess').value,
+          org_id: orgSel.value,
+          leader: document.getElementById('uaLeader').value.trim(),
+        };
+        // Replace any existing grant for the same alias+org (last wins).
+        USER_ACCESS = (USER_ACCESS || []).filter(u =>
+          !(String(u.alias).toLowerCase() === alias && (u.org_id || '') === grant.org_id));
+        USER_ACCESS.push(grant);
+        syncAdminLeaders();
+        aliasEl.value = ''; nameEl.value = '';
+        document.getElementById('uaLeader').value = ''; hint.textContent = '';
+        renderUserAccessRows();
+        // Provision the real login + persist the grant so it takes effect now.
+        setMsg('Granting access to ' + alias + '\u2026');
+        const role = accessToServerRole(grant.access);
+        const ok = await provisionServerUser(alias, role, name);
+        await persistSettings();
+        renderTabs();
+        setMsg(ok ? `${alias} can now sign in (${role}).`
+                  : `Grant saved, but login provisioning failed for ${alias} \u2014 retry Save access.`,
+               ok ? 'success' : 'danger');
+      });
+      document.getElementById('uaRows').addEventListener('click', async (e) => {
+        const del = e.target.closest('.ua-del');
+        if (!del) return;
+        const grant = USER_ACCESS[+del.dataset.i];
+        if (!grant) return;
+        if (!confirm(`Remove access for ${grant.alias}? This also revokes their sign-in.`)) return;
+        USER_ACCESS.splice(+del.dataset.i, 1);
+        syncAdminLeaders();
+        renderUserAccessRows();
+        // Only revoke the server login if no other grant remains for this alias.
+        const stillGranted = (USER_ACCESS || []).some(u =>
+          String(u.alias).toLowerCase() === String(grant.alias).toLowerCase());
+        if (!stillGranted) await deprovisionServerUser(String(grant.alias).toLowerCase());
+        await persistSettings();
+        renderTabs();
+        setMsg(`Removed ${grant.alias}.`, 'success');
+      });
+      saveBtn.addEventListener('click', async () => {
+        syncAdminLeaders();
+        setMsg('Saving \u0026 provisioning\u2026');
+        // Re-provision every grant (idempotent) so logins match the list.
+        let failed = 0;
+        for (const u of (USER_ACCESS || [])) {
+          const alias = String(u.alias || '').toLowerCase().split('@')[0];
+          if (!alias) continue;
+          const ok = await provisionServerUser(alias, accessToServerRole(u.access), u.name);
+          if (!ok) failed += 1;
+        }
+        await persistSettings();
+        renderTabs();   // access changes may change who sees the Admin tab
+        setMsg(failed ? `Saved, but ${failed} login(s) failed to provision.` : 'Saved \u2014 all logins provisioned.',
+               failed ? 'danger' : 'success');
+      });
+    }
+    renderUserAccessRows();
+    card.classList.remove('d-none');
+  }
+
+  // ── performance targets editor (per duration/cycle) ──────────────────
+  function initPerfTargets(){
+    const card = document.getElementById('perfTargetsCard');
+    const rows = document.getElementById('targetsRows');
+    const addBtn = document.getElementById('targetsAddBtn');
+    const saveBtn = document.getElementById('targetsSaveBtn');
+    const msg = document.getElementById('targetsMsg');
+    if (!card || !rows) return;
+    const canEdit = BOOT.role === 'admin';
+
+    // Targets are per-YEAR (a year applies to both H1 & H2), plus a Default.
+    // Years are gathered from historical timeline, the live cycles, the
+    // current calendar year, and any already-saved target keys.
+    function scopeOptions(){
+      const years = new Set();
+      const addYear = (s) => { const m = String(s || '').match(/\d{4}/); if (m) years.add(m[0]); };
+      try {
+        (typeof perfTimeline === 'function' ? perfTimeline() : []).forEach(e => addYear(e.label));
+      } catch (_) { /* perf data not ready */ }
+      try {
+        Object.values(BOOT.cyclesByOrg || {}).forEach(list =>
+          (list || []).forEach(c => { addYear(c.cycle_name); addYear(c.start_date); addYear(c.cycle_id); }));
+      } catch (_) { /* no cycles */ }
+      addYear(String(new Date().getFullYear()));
+      Object.keys(PERF_TARGETS || {}).forEach(k => { if (/^\d{4}$/.test(k)) years.add(k); });
+      return ['default', ...[...years].sort()];
+    }
+    const scopeLabel = (s) => s === 'default' ? 'Default (all cycles)' : s;
+
+    function rowHtml(scope, t){
+      t = t || {};
+      const opts = scopeOptions();
+      if (scope && !opts.includes(scope)) opts.unshift(scope);
+      return `<tr>
+        <td><select class="form-select form-select-sm t-scope" ${canEdit ? '' : 'disabled'}>${
+          opts.map(s => `<option value="${esc(s)}"${s === scope ? ' selected' : ''}>${esc(scopeLabel(s))}</option>`).join('')}</select></td>
+        <td><input type="number" class="form-control form-control-sm t-nps" value="${esc(t.nps ?? '')}" ${canEdit ? '' : 'disabled'}></td>
+        <td><input type="number" class="form-control form-control-sm t-rr" value="${esc(t.rr ?? '')}" ${canEdit ? '' : 'disabled'}></td>
+        <td><input type="number" class="form-control form-control-sm t-closure" value="${esc(t.closure ?? '')}" ${canEdit ? '' : 'disabled'}></td>
+        <td><input type="number" class="form-control form-control-sm t-weeks" value="${esc(t.cycle_weeks ?? '')}" ${canEdit ? '' : 'disabled'}></td>
+        <td>${canEdit ? `<button type="button" class="btn btn-sm btn-outline-danger t-del" title="Remove">&#10005;</button>` : ''}</td>
+      </tr>`;
+    }
+
+    function render(){
+      const keys = Object.keys(PERF_TARGETS || {});
+      if (!keys.includes('default')) keys.unshift('default');
+      rows.innerHTML = keys.map(k => rowHtml(k,
+        (PERF_TARGETS || {})[k] || (k === 'default' ? { nps: 80, rr: 90, closure: 100, cycle_weeks: 10 } : {}))).join('');
+    }
+
+    if (addBtn) addBtn.classList.toggle('d-none', !canEdit);
+    if (saveBtn) saveBtn.classList.toggle('d-none', !canEdit);
+
+    if (canEdit) {
+      addBtn.addEventListener('click', () => rows.insertAdjacentHTML('beforeend', rowHtml('', {})));
+      rows.addEventListener('click', (e) => {
+        const del = e.target.closest('.t-del');
+        if (del) del.closest('tr').remove();
+      });
+      saveBtn.addEventListener('click', async () => {
+        const next = {};
+        [...rows.querySelectorAll('tr')].forEach(tr => {
+          const scope = tr.querySelector('.t-scope').value;
+          const num = (sel) => { const v = tr.querySelector(sel).value.trim(); return v === '' ? null : Number(v); };
+          const set = {};
+          const nps = num('.t-nps'), rr = num('.t-rr'), closure = num('.t-closure'), weeks = num('.t-weeks');
+          if (nps != null) set.nps = nps;
+          if (rr != null) set.rr = rr;
+          if (closure != null) set.closure = closure;
+          if (weeks != null) set.cycle_weeks = weeks;
+          if (scope && Object.keys(set).length) next[scope] = set;
+        });
+        PERF_TARGETS = next;
+        msg.textContent = 'Saving\u2026'; msg.className = 'align-self-center small text-secondary';
+        await persistSettings();
+        msg.textContent = 'Saved.'; msg.className = 'align-self-center small text-success';
+        try {
+          if (typeof perfSelectedEntry === 'function') {
+            const e = perfSelectedEntry();
+            renderPerfTargets(e); renderPerfOrgBoxes(e);
+          }
+        } catch (_) { /* perf not rendered yet */ }
+      });
+    }
+    render();
+    card.classList.remove('d-none');
+  }
 
   // ── section visibility (admin hide/show any tagged table/section) ──
   let HIDDEN = {};  // { hideable_key: true }  (present => hidden)
@@ -3770,10 +4159,11 @@
               <div class="meta">${esc(r.date)}</div>
             </div>
             <div class="fb-score" title="${esc(r.category || 'No score')}">
-              ${r.score == null ? '\u2014' : esc(r.score)}
-              <span class="cat">${esc((r.category || '').slice(0, 9))}</span>
+              <span class="num">${r.score == null ? '\u2014' : esc(r.score)}</span>
+              ${r.category ? `<span class="cat">${esc(r.category)}</span>` : ''}
             </div>
           </div>
+          ${r.what_missing ? '<span class="fb-label">Feedback</span>' : ''}
           <div class="quote">${esc(r.feedback) || '<em class="text-muted">No written feedback</em>'}</div>
           ${r.what_missing ? `<div class="fb-missing"><b>What was missing</b>${esc(r.what_missing)}</div>` : ''}
           ${_fbMailActions(r)}

@@ -91,8 +91,17 @@ def _parse_employee(data: dict) -> dict:
         "name": f"{first} {last}".strip(),
         "title": basic.get("businessTitle") or "",
         "manager_login": str(basic.get("managerLogin") or "").lower(),
+        "level": _to_int(basic.get("jobLevel")),
         "chain": chain,
     }
+
+
+def _to_int(value):
+    """Parse a PAPI job level to int, or None when absent/non-numeric."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def get_employee(alias: str) -> dict | None:

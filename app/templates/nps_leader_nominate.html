@@ -427,9 +427,16 @@ function canAddForViewed() {
 function populateLeaders() {
   const org = activeOrg();
   const leaders = (org && org.leaders) || [];
-  leaderSelect.innerHTML = '<option value="">-- select leader --</option>' +
+  // Privileged viewers get an "All leaders" option so they can see every
+  // nomination at once (the roster may not enumerate all PAPI-derived leaders).
+  const allOpt = isPrivileged() ? '<option value="__ALL__">All leaders</option>' : '';
+  leaderSelect.innerHTML = allOpt + '<option value="">-- select leader --</option>' +
     leaders.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('');
   leaderAliases = Object.fromEntries(leaders.map(l => [l.name, l.alias]));
+  // Admins/editors default to the "All leaders" view.
+  if (isPrivileged() && (viewer.role === 'admin' || viewer.role === 'editor') && !leaderSelect.value) {
+    leaderSelect.value = '__ALL__';
+  }
 }
 
 function applyPrivilegeUI() {
@@ -622,7 +629,8 @@ async function refreshTable() {
   if (!isPrivileged()) return;  // current-cycle list is privileged-only
   const leader = viewedLeader();
   const body = document.getElementById('nominations-body');
-  document.getElementById('table-leader-name').textContent = leader || 'selected leader';
+  document.getElementById('table-leader-name').textContent =
+    leader === '__ALL__' ? 'all leaders' : (leader || 'selected leader');
   if (!leader || !orgSelect.value) {
     lastRows = [];
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Select a leader to view nominations</td></tr>';
@@ -643,8 +651,9 @@ async function refreshTable() {
 }
 
 function canRemove(row) {
-  // Remove appears for rows you own: you are the nominator, or the leader
-  // this list belongs to.
+  // Admins/editors can remove any nomination; otherwise remove appears only
+  // for rows you own (you nominated it, or it's under your own leader).
+  if (viewer.role === 'admin' || viewer.role === 'editor') return true;
   const me = (viewer.alias || '').toLowerCase();
   if (!me) return false;
   if (row.nominated_by && row.nominated_by.toLowerCase() === me) return true;
@@ -653,20 +662,23 @@ function canRemove(row) {
 
 function renderRows() {
   const body = document.getElementById('nominations-body');
+  const allMode = viewedLeader() === '__ALL__';
   if (!lastRows.length) {
     body.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No nominations yet</td></tr>';
     return;
   }
   body.innerHTML = lastRows.map(r => {
     const alias = aliasOf(r.email);
+    const leaderLine = allMode && r.leader
+      ? `<div class="text-muted" style="font-size:12px;">under ${esc(r.leader)}</div>` : '';
     return `
     <tr>
-      <td class="ps-3">${esc(r.name)}</td>
+      <td class="ps-3">${esc(r.name)}${leaderLine}</td>
       <td>${esc(alias)}</td>
       <td>${esc(r.designation) || '-'}</td>
       <td>${esc(r.nominated_by) || '-'}</td>
       <td class="text-end pe-3">
-        ${canRemove(r) ? `<button class="btn btn-sm btn-outline-danger" data-remove-alias="${esc(alias)}">Remove</button>` : ''}
+        ${canRemove(r) ? `<button class="btn btn-sm btn-outline-danger" data-remove-alias="${esc(alias)}" data-remove-leader="${esc(r.leader || '')}">Remove</button>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -710,14 +722,17 @@ async function submitNomination() {
   }
 }
 
-async function removeNomination(stakeholderAlias) {
-  if (!confirm(`Remove ${stakeholderAlias} from ${viewedLeader()}'s nominations?`)) return;
+async function removeNomination(stakeholderAlias, rowLeader) {
+  // In "All leaders" view the row carries its own leader; otherwise use the
+  // currently-viewed leader.
+  const leader = rowLeader || (viewedLeader() === '__ALL__' ? '' : viewedLeader());
+  if (!confirm(`Remove ${stakeholderAlias} from ${leader || 'this leader'}'s nominations?`)) return;
   const res = await fetch(withToken('/nps/nominate/remove'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       org_id: orgSelect.value,
-      leader: viewedLeader(),
+      leader: leader,
       stakeholder_alias: stakeholderAlias,
     }),
   });
@@ -932,7 +947,7 @@ document.getElementById('bulk-add-btn').addEventListener('click', bulkAdd);
 // renderRows() innerHTML swaps, so one listener is enough.
 document.getElementById('nominations-body').addEventListener('click', (ev) => {
   const btn = ev.target.closest('button[data-remove-alias]');
-  if (btn) removeNomination(btn.getAttribute('data-remove-alias'));
+  if (btn) removeNomination(btn.getAttribute('data-remove-alias'), btn.getAttribute('data-remove-leader'));
 });
 // Delegated handler for per-row "Add" buttons in the last-cycle modal.
 document.getElementById('prev-modal-body').addEventListener('click', async (ev) => {

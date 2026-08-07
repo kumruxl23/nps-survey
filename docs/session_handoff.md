@@ -2,6 +2,86 @@
 
 Paste-ready context to resume in a new chat.
 
+## 🟢 LATEST STATE 2026-08-07 (PART 8) — RBAC, L5+ gating, admin tools, feedback polish
+
+Handover to backup owner (kuvinu@). Everything below is DEPLOYED to prod
+(EC2 `i-06ccd83e4b55fa98f`, ap-south-1) and committed to git. Build green:
+**464 tests pass** (`python -m pytest app -q`).
+
+### Access control (the big one) — `app/services/nps_access_service.py` (NEW)
+Single source of truth for who-can-see-what. `resolve_access(alias)` returns
+`{role, orgs, home_org, leader_name, is_super, is_leader, source}` or None.
+- **Manual grants win**, else **live PAPI reporting**:
+  - `__user__<alias>` role record: `admin`/`editor` → full; bare `viewer` →
+    org metrics only (no feedback).
+  - `user_access` blob grants (admin page): admin, or viewer scoped to a
+    leader / one-or-more orgs / all orgs (blank org).
+  - Otherwise PAPI: a person under a configured **org head** is classified
+    into that org. **Head = manager** ⇒ that person is a *leader*; anyone
+    whose chain passes a leader is a viewer scoped to that leader's feedback.
+- **Org heads (precedence order)** default in code, override via `org_heads`
+  settings key: CPT IN=`sakau` → CPT NA=`mill` → FEC=`terrickw`. Precedence
+  puts Sandeep's directs in CPT IN even though she reports to the CPT NA head.
+  **Heads themselves get NO auto access** (role assigned manually later).
+- **L5+ gate**: PAPI now parses `jobLevel` (`papi_client`). Auto access requires
+  level >= `MIN_AUTO_LEVEL` (env `NPS_MIN_LEADER_LEVEL`, default 5); below/unknown
+  -> denied. Manual grants bypass. **Nominating** also requires L5+ (except
+  admins/editors) — enforced in `/nominate/submit` + `/nominate/bulk-submit`
+  (skipped when PAPI unconfigured, i.e. local/tests).
+- **Session re-validation**: auth decorators (`auth_routes._establish_session`)
+  re-resolve from the ALB header on every request (short TTL cache in
+  `nps_access_service`, `invalidate()` on grant changes), so removing a grant
+  revokes a live session within ~60s instead of never.
+- Tests: `test_nps_access_service.py` (18), plus updated midway/papi/nominate.
+
+### Dashboard / admin (in `nps_dashboard.html` + `routes.py`)
+- **Tab gating**: non-admins see only Read Me + their own org (Metrics) +
+  Feedback (own rows). **Program Performance (cross-org) + Admin tabs are
+  admin-only.** Server filters visible orgs from the session scope.
+- **Admin -> User Access** manager: type alias -> PAPI name autofill; Access =
+  Admin / Viewer; Org (specific / All orgs / add multiple); optional Specific
+  leader (alias or name -> autofill). Add both **provisions the real Midway
+  login** (`/nps/auth/users/*`) AND saves the grant; Remove revokes. Table lists
+  ALL grants (not filtered by the scope selector).
+- **Admin -> Performance Targets**: per-YEAR targets (Default / year); a year
+  applies to both H1 & H2. Drives the Perf page vs-target.
+- **Admin org-scope selector** defaults the User Access add-row org.
+
+### Program Performance page
+- Ranking TABLE removed -> per-org **metric boxes ranked by NPS** (top->bottom)
+  with rank badge + **vs Target** deltas on NPS & Response Rate.
+- **Program Targets heading is dynamic** (tracks the selected cycle's year).
+- **Category Distribution** moved up beside Program Targets (2-col).
+
+### Feedback tab
+- Score badge is a **themed pill** (full Promoter/Passive/Detractor, no crop).
+- Cards with a "What was missing" box now label the quote **FEEDBACK** to
+  disambiguate. Per-leader / super-viewer gating via `_feedback_scope`.
+
+### Nominate tab
+- Admins/editors get an **"All leaders"** option -> sees every nomination for
+  the cycle (leader shown per row), can remove any. (Root cause of "admin can't
+  see all": leader dropdown is roster-fed, and the roster no longer enumerates
+  PAPI-derived leaders.)
+
+### Deploy / verify (unchanged workflow)
+`python infra/ssm_deploy.py` (needs fresh `ada` creds for 399016860083;
+`ada credentials update --account=399016860083 --provider=conduit
+--role=IibsAdminAccess-DO-NOT-DELETE --once`). Ships `app/` + `run.py` only.
+Verify via SSM curl with `Host: nps.whs-cpt.amazon.dev` +
+`X-Amzn-Oidc-Identity: <alias>` against localhost:5000. Always `node --check`
+the inline `<script>` of edited templates before deploy.
+
+### Open / caveats
+- **`kuvinu` = admin** (active). `raabhas` = admin grant. Org heads
+  `sakau`/`mill`/`terrickw` baked in code (override via `org_heads` settings).
+- Feedback row scoping matches leader **name**; a PAPI-name vs nomination-name
+  mismatch could drop rows — watch for gaps.
+- gunicorn runs **2 workers** -> scheduler + access cache are per-worker
+  (duplicate-send risk pre-existing; `NPS_DEMO_SAFE=1` blocks real sends).
+- Slack bot token was shared in plaintext earlier — **rotate** it.
+- Kale privacy review: chase POC (see the OnePrivacy Slack draft in chat).
+
 ## 🟢 LATEST STATE 2026-08-06 (PART 7) — Admin-defined survey phases + cadence notifications
 
 DONE + deployed + verified live (EC2 `i-06ccd83e4b55fa98f`, ap-south-1):

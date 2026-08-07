@@ -25,6 +25,7 @@ def _employee_payload(login="jdoe", first="John", last="Doe",
             "lastName": last,
             "businessTitle": title,
             "managerLogin": manager,
+            "jobLevel": 6,
         },
         "supervisorChain": [{"login": c} for c in chain],
     }
@@ -52,6 +53,7 @@ class TestGetEmployee:
         assert emp == {
             "login": "jdoe", "name": "John Doe",
             "title": "Sr. PM", "manager_login": "boss1",
+            "level": 6,
             "chain": ["boss1", "direct1"],
         }
         assert "login:jdoe" in mock_get.call_args[0][0]
